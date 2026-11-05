@@ -1,5 +1,6 @@
 """Windows YouTube audio downloader and verified USB copier."""
 import ctypes
+from collections import deque
 import hashlib
 import os
 from pathlib import Path
@@ -47,31 +48,71 @@ def digest(path):
     return result.digest()
 
 
-def copy_verified(source, folder):
+def copy_verified(source, folder, progress=None):
+    def report(stage, percent=None):
+        if progress:
+            progress(stage, percent)
+
     folder.mkdir(parents=True, exist_ok=True)
     target = folder / source.name
     if target.exists():
+        report('Checking existing file')
         if digest(source) == digest(target):
+            report('Already present', 100)
             return 'Already present: ' + source.name
         raise FileExistsError('Different file already exists: ' + str(target))
     if shutil.disk_usage(folder).free < source.stat().st_size + 1024 * 1024:
         raise OSError('Not enough free space on the selected drive.')
     # Exclusive creation prevents a race from overwriting another file.
     created = False
+    report('Copying to USB', 0)
     try:
         with target.open('xb') as output:
             created = True
             with source.open('rb') as incoming:
-                shutil.copyfileobj(incoming, output)
+                total = source.stat().st_size
+                copied = 0
+                previous = -1
+                for chunk in iter(lambda: incoming.read(1024 * 1024), b''):
+                    output.write(chunk)
+                    copied += len(chunk)
+                    percent = min(99, int(copied * 100 / total)) if total else 99
+                    if percent != previous:
+                        report('Copying to USB', percent)
+                        previous = percent
             output.flush()
             os.fsync(output.fileno())
+        report('Verifying USB copy')
         if digest(source) != digest(target):
             raise OSError('Copy verification failed: ' + source.name)
     except Exception:
         if created:
             target.unlink(missing_ok=True)
         raise
+    report('Copy verified', 100)
     return 'Copied and verified: ' + source.name
+
+
+def download_with_progress(command, progress):
+    """Stream progress without buffering the entire downloader output."""
+    recent = deque(maxlen=40)
+    with subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                          text=True, encoding='utf-8', errors='replace',
+                          creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0)) as process:
+        for line in process.stdout:
+            if line.startswith('USB_PROGRESS:'):
+                parts = line.strip().split(':', 1)[1].split('|')
+                try:
+                    downloaded = float(parts[0])
+                    total = next(float(value) for value in parts[1:] if value not in ('NA', 'None', '') and float(value) > 0)
+                    progress('Downloading current track', max(0, min(100, downloaded * 100 / total)))
+                except (ValueError, StopIteration, IndexError):
+                    progress('Downloading current track')
+            elif line.startswith('USB_CONVERT:') or line.startswith('[ExtractAudio]'):
+                progress('Converting to MP3')
+            else:
+                recent.append(line.rstrip())
+        return subprocess.CompletedProcess(command, process.wait(), '', '\n'.join(recent))
 
 
 def removable_drives():
@@ -86,7 +127,7 @@ class App:
         self.root = root
         self.events = queue.Queue()
         root.title('YouTube to USB MP3')
-        root.geometry('720x540')
+        root.geometry('760x600')
         frame = ttk.Frame(root, padding=18)
         frame.pack(fill='both', expand=True)
         ttk.Label(frame, text='YouTube links (one per line; playlists are supported)').pack(anchor='w')
@@ -103,6 +144,10 @@ class App:
         ttk.Label(frame, text='Use only audio you own or have permission to download.').pack(anchor='w')
         self.button = ttk.Button(frame, text='Convert and copy', command=self.start)
         self.button.pack(pady=12)
+        self.progress_label = ttk.Label(frame, text='Ready')
+        self.progress_label.pack(anchor='w')
+        self.progress_bar = ttk.Progressbar(frame, maximum=100, mode='determinate')
+        self.progress_bar.pack(fill='x', pady=(4, 10))
         self.log = tk.Text(frame, height=12, state='disabled', wrap='word')
         self.log.pack(fill='both', expand=True)
         self.busy = False
@@ -148,6 +193,7 @@ class App:
             return
         self.busy = True
         self.button.configure(state='disabled')
+        self.show_progress('Preparing download')
         threading.Thread(target=self.run, args=(urls, destination), daemon=True).start()
 
     def run(self, urls, destination):
@@ -156,20 +202,22 @@ class App:
         cache = Path(os.environ.get('LOCALAPPDATA', str(Path.home()))) / 'YouTubeToUSB' / 'Downloads'
         try:
             cache.mkdir(parents=True, exist_ok=True)
-            for url in urls:
+            for link_index, url in enumerate(urls, 1):
                 try:
+                    self.report_progress(f'Preparing link {link_index} of {len(urls)}')
                     self.events.put('Downloading: ' + url)
                     with tempfile.TemporaryDirectory() as work:
                         manifest = Path(work) / 'files.txt'
                         command = downloader_command() + ['--ignore-config',
                                    '--js-runtimes', 'node',
-                                   '--no-progress', '--windows-filenames', '--no-overwrites',
+                                   '--progress', '--newline', '--no-colors', '--progress-delta', '0.3',
+                                   '--progress-template', 'download:USB_PROGRESS:%(progress.downloaded_bytes)s|%(progress.total_bytes)s|%(progress.total_bytes_estimate)s',
+                                   '--progress-template', 'postprocess:USB_CONVERT:%(progress.status)s',
+                                   '--windows-filenames', '--no-overwrites',
                                    '--extract-audio', '--audio-format', 'mp3', '--audio-quality', '192K',
                                    '--paths', str(cache), '-o', '%(title).140B [%(id)s].%(ext)s',
                                    '--print-to-file', 'after_move:filepath', str(manifest), '--', url]
-                        result = subprocess.run(command, capture_output=True, text=True,
-                                                encoding='utf-8', errors='replace',
-                                                creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+                        result = download_with_progress(command, self.report_progress)
                         # Even a partially failed playlist may contain completed tracks.
                         files = manifest.read_text(encoding='utf-8').splitlines() if manifest.exists() else []
                         for filename in dict.fromkeys(files):
@@ -178,7 +226,8 @@ class App:
                                 raise ValueError('Unexpected downloader output path.')
                             if not destination.is_dir():
                                 raise OSError('Destination disconnected. Local MP3 files are retained.')
-                            self.events.put(copy_verified(source, destination))
+                            self.report_progress('Copying: ' + source.name, 0)
+                            self.events.put(copy_verified(source, destination, self.report_progress))
                         if result.returncode:
                             raise RuntimeError(result.stderr.strip()[-2500:] or 'Download failed.')
                         if not files:
@@ -187,10 +236,25 @@ class App:
                     failures += 1
                     self.events.put('ERROR: ' + str(error))
             self.events.put(f'Finished with {failures} failed link(s). Local copies: {cache}')
+            self.report_progress('Finished with errors' if failures else 'All files copied and verified', None if failures else 100)
         except Exception as error:
             self.events.put('ERROR: ' + str(error))
+            self.report_progress('Stopped with an error')
         finally:
             self.events.put(None)
+
+    def report_progress(self, stage, percent=None):
+        self.events.put({'stage': stage, 'percent': percent})
+
+    def show_progress(self, stage, percent=None):
+        self.progress_bar.stop()
+        if percent is None and self.busy:
+            self.progress_bar.configure(mode='indeterminate')
+            self.progress_bar.start(15)
+        else:
+            self.progress_bar.configure(mode='determinate', value=percent or 0)
+        suffix = f' — {percent:.0f}%' if percent is not None else ''
+        self.progress_label.configure(text=stage + suffix)
 
     def poll(self):
         try:
@@ -198,7 +262,10 @@ class App:
                 event = self.events.get_nowait()
                 if event is None:
                     self.busy = False
+                    self.progress_bar.stop()
                     self.button.configure(state='normal')
+                elif isinstance(event, dict):
+                    self.show_progress(event['stage'], event['percent'])
                 else:
                     self.log.configure(state='normal')
                     self.log.insert('end', event + '\n')

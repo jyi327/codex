@@ -39,7 +39,7 @@ class WorkflowTests(unittest.TestCase):
             instance = app.App.__new__(app.App)
             instance.events = queue.Queue()
 
-            def download(command, **kwargs):
+            def download(command, progress):
                 cache = Path(command[command.index('--paths') + 1])
                 source = cache / 'song.mp3'
                 source.write_bytes(b'downloaded audio')
@@ -47,10 +47,29 @@ class WorkflowTests(unittest.TestCase):
                 manifest.write_text(str(source) + '\n', encoding='utf-8')
                 return subprocess.CompletedProcess(command, 0, '', '')
 
-            with patch.dict(app.os.environ, {'LOCALAPPDATA': str(root)}), patch.object(app.subprocess, 'run', side_effect=download):
+            with patch.dict(app.os.environ, {'LOCALAPPDATA': str(root)}), patch.object(app, 'download_with_progress', side_effect=download):
                 instance.run(['https://youtu.be/example'], usb)
             self.assertEqual((usb / 'song.mp3').read_bytes(), b'downloaded audio')
             self.assertFalse((usb / 'Music').exists())
+
+    def test_streamed_download_percentage_and_conversion(self):
+        updates = []
+        code = "print('USB_PROGRESS:25|100|NA'); print('USB_PROGRESS:75|NA|100'); print('USB_PROGRESS:80|NA|NA'); print('USB_CONVERT:started'); print('test error'); raise SystemExit(2)"
+        result = app.download_with_progress([app.sys.executable, '-c', code], lambda stage, percent=None: updates.append((stage, percent)))
+        self.assertEqual(result.returncode, 2)
+        self.assertIn('test error', result.stderr)
+        self.assertEqual(updates, [('Downloading current track', 25), ('Downloading current track', 75), ('Downloading current track', None), ('Converting to MP3', None)])
+
+    def test_copy_percentage_finishes_after_verification(self):
+        updates = []
+        with tempfile.TemporaryDirectory() as work:
+            source = Path(work) / 'song.mp3'
+            source.write_bytes(b'x' * (2 * 1024 * 1024 + 1))
+            app.copy_verified(source, Path(work) / 'usb', lambda stage, percent=None: updates.append((stage, percent)))
+        copying = [percent for stage, percent in updates if stage == 'Copying to USB']
+        self.assertEqual(copying, sorted(copying))
+        self.assertTrue(all(0 <= percent < 100 for percent in copying))
+        self.assertEqual(updates[-2:], [('Verifying USB copy', None), ('Copy verified', 100)])
 
     def test_portable_downloader_uses_bundled_executable(self):
         with tempfile.TemporaryDirectory() as work:
