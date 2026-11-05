@@ -5,7 +5,7 @@ function Check-Exit { if ($LASTEXITCODE -ne 0) { throw "Command failed with exit
 python -m venv .build-venv
 Check-Exit
 $python = Join-Path $PSScriptRoot '.build-venv\Scripts\python.exe'
-& $python -m pip install 'pyinstaller==6.16.0'
+& $python -m pip install 'pyinstaller==6.16.0' -r requirements-ui.txt
 Check-Exit
 $tools = Join-Path $PSScriptRoot 'build\portable-tools'
 New-Item -ItemType Directory -Force $tools | Out-Null
@@ -26,8 +26,14 @@ $expected = ($line -split '\s+')[0]
 if ((Get-FileHash "$tools\yt-dlp.exe" -Algorithm SHA256).Hash -ne $expected) { throw 'yt-dlp checksum mismatch' }
 & "$tools\yt-dlp.exe" --version
 Check-Exit
-& $python -m PyInstaller --noconfirm --clean --windowed --onedir --name YouTubeToUSB --add-binary "$tools\ffmpeg.exe;tools" --add-binary "$tools\ffprobe.exe;tools" --add-binary "$tools\node.exe;tools" --add-binary "$tools\yt-dlp.exe;tools" app.py
+& $python -m PyInstaller --noconfirm --clean --windowed --onedir --name YouTubeToUSB --collect-all customtkinter --add-binary "$tools\ffmpeg.exe;tools" --add-binary "$tools\ffprobe.exe;tools" --add-binary "$tools\node.exe;tools" --add-binary "$tools\yt-dlp.exe;tools" app.py
 Check-Exit
+$smoke = Start-Process -FilePath "$PSScriptRoot\dist\YouTubeToUSB\YouTubeToUSB.exe" -ArgumentList '--smoke-test' -PassThru
+if (-not $smoke.WaitForExit(30000)) {
+    $smoke.Kill()
+    throw 'Packaged app did not finish its startup check within 30 seconds'
+}
+if ($smoke.ExitCode -ne 0) { throw "Packaged app startup failed: $($smoke.ExitCode)" }
 Copy-Item README.md dist\YouTubeToUSB\README.md -Force
 Compress-Archive -Path dist\YouTubeToUSB -DestinationPath dist\YouTubeToUSB-Windows-x64.zip -Force
 Write-Host 'Built dist\YouTubeToUSB-Windows-x64.zip. Extract the entire ZIP before starting the app.'

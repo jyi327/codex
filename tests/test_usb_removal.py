@@ -85,6 +85,8 @@ class SafeRemovalTests(unittest.TestCase):
         instance.events.put(None)
         instance.busy = True
         instance.transfer_cleanup_failed = False
+        instance.download_complete = False
+        instance.show_done = MagicMock()
         instance.close_when_done = True
         instance.cancel_event = threading.Event()
         instance.cancel_event.set()
@@ -97,6 +99,47 @@ class SafeRemovalTests(unittest.TestCase):
         instance.poll()
         self.assertEqual(seen_busy, [False])
         instance.root.destroy.assert_not_called()
+
+    def test_cancel_requests_removal_after_cleanup_without_closing(self):
+        instance = app.App.__new__(app.App)
+        instance.events = queue.Queue()
+        instance.events.put(None)
+        instance.busy = True
+        instance.transfer_cleanup_failed = False
+        instance.download_complete = False
+        instance.close_when_done = False
+        instance.remove_when_stopped = True
+        instance.cancel_event = threading.Event()
+        instance.cancel_event.set()
+        for name in ('progress_bar', 'set_controls', 'show_progress', 'show_done', 'root', 'prepare_exit'):
+            setattr(instance, name, MagicMock())
+        instance.poll()
+        instance.prepare_exit.assert_called_once_with(close_app=False)
+        self.assertFalse(instance.busy)
+
+    def test_failed_or_missing_usb_closes_silently(self):
+        instance = app.App.__new__(app.App)
+        instance.events = queue.Queue()
+        instance.events.put({'usb_error': 'Device in use'})
+        instance.progress_bar = MagicMock()
+        instance.root = MagicMock()
+        with patch.object(app.messagebox, 'askyesno') as ask, patch.object(app.messagebox, 'showinfo') as info:
+            instance.poll()
+        ask.assert_not_called()
+        info.assert_not_called()
+        instance.root.destroy.assert_called_once()
+
+    def test_successful_done_closes_without_a_message(self):
+        instance = app.App.__new__(app.App)
+        instance.events = queue.Queue()
+        instance.events.put({'usb_ready': True})
+        instance.progress_bar = MagicMock()
+        instance.root = MagicMock()
+        instance.exit_after_removal = True
+        with patch.object(app.messagebox, 'showinfo') as info:
+            instance.poll()
+        info.assert_not_called()
+        instance.root.destroy.assert_called_once()
 
 
 if __name__ == '__main__':

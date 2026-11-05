@@ -15,6 +15,7 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 from urllib.parse import urlparse
 import windows_usb
+import customtkinter as ctk
 
 
 def bundled_tools():
@@ -221,6 +222,80 @@ def removable_drives():
             if ctypes.windll.kernel32.GetDriveTypeW(f'{letter}:\\') == 2]
 
 
+class USBSelector(ctk.CTkFrame):
+    """One compact device card; secondary choices stay in its dropdown."""
+    def __init__(self, master, on_change, font_family):
+        super().__init__(master, fg_color='white', border_color='#d4e2f6', border_width=1, corner_radius=18, height=94)
+        self._value = ''
+        self._choices = []
+        self._state = 'normal'
+        self.on_change = on_change
+        self.grid_columnconfigure(1, weight=1)
+        icon_frame = ctk.CTkFrame(self, width=56, height=56, corner_radius=14, fg_color='#e7f0ff')
+        icon_frame.grid(row=0, column=0, rowspan=2, padx=(18, 16), pady=18)
+        icon_frame.grid_propagate(False)
+        icon = tk.Canvas(icon_frame, width=32, height=40, bg='#e7f0ff', highlightthickness=0)
+        icon.place(relx=.5, rely=.5, anchor='center')
+        icon.create_line(16, 31, 16, 8, fill='#2563eb', width=3)
+        icon.create_polygon(16, 2, 10, 10, 22, 10, fill='#2563eb')
+        icon.create_oval(11, 29, 21, 39, fill='#2563eb', outline='')
+        icon.create_line(16, 25, 6, 19, 6, 12, fill='#2563eb', width=3)
+        icon.create_oval(2, 8, 10, 16, fill='#2563eb', outline='')
+        icon.create_line(16, 21, 26, 15, 26, 10, fill='#2563eb', width=3)
+        icon.create_rectangle(22, 5, 30, 13, fill='#2563eb', outline='')
+        ctk.CTkLabel(self, text='USB drive', font=(font_family, 18, 'bold'), text_color='#182338', anchor='w').grid(row=0, column=1, sticky='sw', pady=(16, 0))
+        self.path_label = ctk.CTkLabel(self, text='No USB connected', font=(font_family, 16), text_color='#64748b', anchor='w')
+        self.path_label.grid(row=1, column=1, sticky='nw', pady=(0, 16))
+        self.badge = ctk.CTkLabel(self, text='Not connected', font=(font_family, 13), corner_radius=14, fg_color='#f1f5f9', text_color='#64748b', padx=12, height=30)
+        self.badge.grid(row=0, column=2, rowspan=2, padx=(8, 6))
+        self.menu_button = ctk.CTkButton(self, text='⌄', width=42, height=42, corner_radius=12, fg_color='transparent', hover_color='#edf4ff', text_color='#526177', font=(font_family, 24), command=self.open_menu)
+        self.menu_button.grid(row=0, column=3, rowspan=2, padx=(0, 14))
+        self.menu = tk.Menu(self, tearoff=False, font=(font_family, 14), bg='white', fg='#182338', activebackground='#e7f0ff', activeforeground='#1d4ed8', borderwidth=0)
+
+    def open_menu(self):
+        if self._state == 'disabled':
+            return
+        self.on_change(refresh=True)
+        self.menu.delete(0, 'end')
+        for drive in self._choices:
+            self.menu.add_command(label=drive, command=lambda value=drive: self.choose(value))
+        if self._choices:
+            self.menu.add_separator()
+        self.menu.add_command(label='Choose folder…', command=lambda: self.on_change(browse=True))
+        self.menu.add_command(label='Refresh', command=lambda: self.on_change(refresh=True))
+        try:
+            self.menu.tk_popup(self.winfo_rootx() + self.winfo_width() - 210, self.winfo_rooty() + self.winfo_height() - 10)
+        finally:
+            self.menu.grab_release()
+
+    def choose(self, value):
+        self.set(value)
+        self.on_change()
+
+    def get(self):
+        return self._value
+
+    def set(self, value):
+        self._value = value
+        self.path_label.configure(text=value or 'No USB connected')
+        self.badge.configure(text='● Connected' if value else 'Not connected', fg_color='#e9f7ee' if value else '#f1f5f9', text_color='#237544' if value else '#64748b')
+
+    def cget(self, key):
+        if key == 'values':
+            return self._choices
+        if key == 'state':
+            return self._state
+        return super().cget(key)
+
+    def configure(self, **kwargs):
+        if 'values' in kwargs:
+            self._choices = list(kwargs.pop('values'))
+        if 'state' in kwargs:
+            self._state = kwargs.pop('state')
+            self.menu_button.configure(state=self._state)
+        return super().configure(**kwargs)
+
+
 class App:
     def __init__(self, root):
         self.root = root
@@ -233,113 +308,124 @@ class App:
         self.usb_device = None
         self.usb_identity_error = None
         self.last_destination = None
-        root.title('Songs to your USB drive')
-        root.geometry('820x680')
-        root.minsize(680, 560)
-        root.option_add('*Font', ('Segoe UI', 14))
-        style = ttk.Style(root)
-        style.theme_use('clam')
-        style.configure('.', font=('Segoe UI', 14), background='#f3f5f8', foreground='#18283b')
-        style.configure('Title.TLabel', font=('Segoe UI', 24, 'bold'))
-        style.configure('Step.TLabel', font=('Segoe UI', 16, 'bold'))
-        style.configure('TButton', padding=(16, 12))
-        style.configure('Start.TButton', font=('Segoe UI', 17, 'bold'), background='#1457a0', foreground='white')
-        style.map('Start.TButton', background=[('disabled', '#d6dee8'), ('active', '#103f75')], foreground=[('disabled', '#566373')])
-        style.configure('Stop.TButton', font=('Segoe UI', 17, 'bold'), background='#a72a28', foreground='white')
-        style.map('Stop.TButton', background=[('disabled', '#d6dee8'), ('active', '#7c1c1b')], foreground=[('disabled', '#566373')])
-        style.configure('TProgressbar', thickness=28)
-        canvas = tk.Canvas(root, highlightthickness=0, background='#f3f5f8')
-        page_scroll = ttk.Scrollbar(root, command=canvas.yview)
-        canvas.configure(yscrollcommand=page_scroll.set)
-        page_scroll.pack(side='right', fill='y')
-        canvas.pack(side='left', fill='both', expand=True)
-        frame = ttk.Frame(canvas, padding=22)
-        page = canvas.create_window((0, 0), window=frame, anchor='nw')
-        frame.bind('<Configure>', lambda event: canvas.configure(scrollregion=canvas.bbox('all')))
-        canvas.bind('<Configure>', lambda event: canvas.itemconfigure(page, width=event.width))
-        root.bind('<MouseWheel>', lambda event: canvas.yview_scroll(-int(event.delta / 120), 'units') if not isinstance(event.widget, tk.Text) else None)
-        ttk.Label(frame, text='Songs to your USB drive', style='Title.TLabel').pack(anchor='w')
-        ttk.Label(frame, text='Plug in your USB drive to begin.').pack(anchor='w', pady=(4, 16))
-        link_row = ttk.Frame(frame)
-        link_row.pack(fill='x')
-        ttk.Label(link_row, text='1. Paste your YouTube links', style='Step.TLabel').pack(side='left')
-        self.paste_button = ttk.Button(link_row, text='Paste links', command=self.paste_links)
-        self.paste_button.pack(side='right')
-        link_box = ttk.Frame(frame)
-        link_box.pack(fill='x', pady=(6, 4))
-        self.urls = tk.Text(link_box, height=4, width=40, wrap='word', font=('Segoe UI', 14),
-                            background='white', foreground='#18283b', insertbackground='#18283b',
-                            relief='solid', borderwidth=1, undo=True)
-        link_scroll = ttk.Scrollbar(link_box, command=self.urls.yview)
-        self.urls.configure(yscrollcommand=link_scroll.set)
-        self.urls.pack(side='left', fill='both', expand=True)
-        link_scroll.pack(side='right', fill='y')
-        ttk.Label(frame, text='One link per line.').pack(anchor='w', pady=(0, 12))
-        ttk.Label(frame, text='2. Check your USB drive', style='Step.TLabel').pack(anchor='w')
-        row = ttk.Frame(frame)
-        row.pack(fill='x', pady=8)
-        self.drive = ttk.Combobox(row, font=('Segoe UI', 14))
-        self.refresh_drives()
-        self.drive.pack(side='left', fill='x', expand=True)
-        self.refresh_button = ttk.Button(row, text='Find USB', command=self.refresh_drives)
-        self.refresh_button.pack(side='left', padx=8)
-        self.browse_button = ttk.Button(row, text='Choose folder', command=self.browse)
-        self.browse_button.pack(side='left')
-        ttk.Label(frame, text='3. Start copying your songs', style='Step.TLabel').pack(anchor='w')
-        buttons = ttk.Frame(frame)
-        buttons.pack(fill='x', pady=8)
-        self.button = ttk.Button(buttons, text='Start', style='Start.TButton', command=self.start)
-        self.button.pack(side='left', fill='x', expand=True, padx=(0, 6))
-        self.cancel_button = ttk.Button(buttons, text='Cancel', style='Stop.TButton', command=self.cancel, state='disabled')
-        self.cancel_button.pack(side='left', fill='x', expand=True, padx=(6, 0))
-        self.done_button = ttk.Button(frame, text='Done', style='Start.TButton', command=self.close)
-        self.done_button.pack(fill='x', pady=(4, 0))
-        self.progress_label = ttk.Label(frame, text='Ready. Paste a link above to begin.', style='Step.TLabel', wraplength=620)
-        self.progress_label.pack(anchor='w', pady=(10, 4))
-        self.progress_bar = ttk.Progressbar(frame, maximum=100, mode='determinate')
-        self.progress_bar.pack(fill='x', pady=(4, 8))
-        ttk.Label(frame, text='Press Done before unplugging.').pack(anchor='w', pady=(0, 6))
+        self.remove_when_stopped = False
+        self.exit_after_removal = True
+        self.download_complete = False
+        interface_font = 'Segoe UI' if sys.platform == 'win32' else 'Helvetica'
+        ctk.set_appearance_mode('light')
+        root.title('YouTube to MP3')
+        root.geometry('800x660')
+        root.minsize(660, 580)
+        root.configure(bg='#eff5ff')
+        self.page = ctk.CTkScrollableFrame(root, fg_color='#eff5ff', corner_radius=0, scrollbar_button_color='#d9e4f4', scrollbar_button_hover_color='#b8cceb')
+        self.page.pack(fill='both', expand=True)
+        frame = ctk.CTkFrame(self.page, fg_color='transparent')
+        frame.pack(fill='x', expand=True, padx=26, pady=24)
+        ctk.CTkLabel(frame, text='YouTube links', font=(interface_font, 23, 'bold'), text_color='#17253b', anchor='w').pack(fill='x', pady=(0, 14))
+        self.urls = ctk.CTkTextbox(frame, height=180, corner_radius=18, border_width=1, border_color='#ccdcf3',
+                                  fg_color='white', text_color='#17253b', font=(interface_font, 17),
+                                  wrap='word', spacing1=4, spacing3=4, undo=True)
+        self.urls.pack(fill='x')
+        self.urls.bind('<<Paste>>', self.paste_links)
+        self.drive = USBSelector(frame, self.drive_changed, interface_font)
+        self.drive.pack(fill='x', pady=(22, 0))
+        progress_row = ctk.CTkFrame(frame, fg_color='transparent')
+        progress_row.pack(fill='x', pady=(30, 12))
+        self.progress_label = ctk.CTkLabel(progress_row, text='Ready', font=(interface_font, 18, 'bold'), text_color='#17253b', wraplength=500, anchor='w')
+        self.progress_label.pack(side='left', fill='x', expand=True)
+        self.percent_label = ctk.CTkLabel(progress_row, text='0%', font=(interface_font, 20), text_color='#526177')
+        self.percent_label.pack(side='right', padx=(12, 0))
+        self.progress_bar = ctk.CTkProgressBar(frame, height=10, corner_radius=5, fg_color='#d8e3f2', progress_color='#2563eb')
+        self.progress_bar.set(0)
+        self.progress_bar.pack(fill='x', pady=(0, 28))
+        self.action_frame = ctk.CTkFrame(frame, fg_color='transparent')
+        self.action_frame.pack(fill='x')
+        self.button = ctk.CTkButton(self.action_frame, text='▶  START', height=60, corner_radius=16, font=(interface_font, 20, 'bold'), fg_color='#2563eb', hover_color='#1d4ed8', text_color='white', text_color_disabled='#7f93ae', command=self.start)
+        self.button.pack(side='left', fill='x', expand=True, padx=(0, 8))
+        self.cancel_button = ctk.CTkButton(self.action_frame, text='×  CANCEL', height=60, corner_radius=16, border_width=1, border_color='#c6d6ec', font=(interface_font, 20, 'bold'), fg_color='white', hover_color='#e8f0fc', text_color='#526177', text_color_disabled='#9aa9bd', command=self.cancel, state='disabled')
+        self.cancel_button.pack(side='left', fill='x', expand=True, padx=(8, 0))
+        self.done_button = ctk.CTkButton(frame, text='✓  DONE', height=60, corner_radius=16, font=(interface_font, 20, 'bold'), fg_color='#2563eb', hover_color='#1d4ed8', text_color='white', command=self.close)
         self.details_visible = tk.BooleanVar(value=False)
-        ttk.Checkbutton(frame, text='Show details', variable=self.details_visible, command=self.toggle_details).pack(anchor='w')
-        self.details_frame = ttk.Frame(frame)
-        self.log = tk.Text(self.details_frame, height=5, state='disabled', wrap='word',
-                           font=('Segoe UI', 12), background='white', foreground='#18283b')
-        scroll = ttk.Scrollbar(self.details_frame, command=self.log.yview)
-        self.log.configure(yscrollcommand=scroll.set)
-        self.log.pack(side='left', fill='both', expand=True)
-        scroll.pack(side='right', fill='y')
+        self.details_check = ctk.CTkButton(frame, text='⌄  Details', font=(interface_font, 14), text_color='#64748b', fg_color='transparent', hover_color='#e2ecfb', width=100, height=30, anchor='w', command=self.toggle_details)
+        self.details_check.pack(anchor='w', pady=(16, 0))
+        self.details_frame = ctk.CTkFrame(frame, fg_color='transparent')
+        self.log = ctk.CTkTextbox(self.details_frame, height=110, state='disabled', wrap='word', corner_radius=12, font=(interface_font, 13), fg_color='white', text_color='#526177')
+        self.log.pack(fill='both', expand=True)
         root.protocol('WM_DELETE_WINDOW', self.close)
         root.bind('<Alt-s>', lambda event: self.start() if not self.busy else None)
         root.bind('<Escape>', lambda event: self.cancel())
+        self.refresh_drives()
         root.after(100, self.poll)
+        root.after(1500, self.monitor_drives)
         self.urls.focus_set()
 
     def toggle_details(self):
-        if self.details_visible.get():
-            self.details_frame.pack(fill='both', expand=True, pady=(6, 0))
+        visible = not self.details_visible.get()
+        self.details_visible.set(visible)
+        self.details_check.configure(text=('⌃' if visible else '⌄') + '  Details')
+        if visible:
+            self.details_frame.pack(fill='both', expand=True, pady=(8, 0))
         else:
             self.details_frame.pack_forget()
 
-    def paste_links(self):
+    def drive_changed(self, refresh=False, browse=False):
+        if refresh:
+            self.refresh_drives()
+        elif browse:
+            self.browse()
+        self.update_start_state()
+
+    def update_start_state(self):
+        if hasattr(self, 'button'):
+            enabled = bool(self.drive.get()) and not self.busy and not self.ejecting
+            self.button.configure(state='normal' if enabled else 'disabled', fg_color='#2563eb' if enabled else '#dce5f2')
+            if not self.busy and not self.ejecting and not self.download_complete:
+                if not self.drive.get():
+                    self.show_progress('No USB connected')
+                elif self.progress_label.cget('text') == 'No USB connected':
+                    self.show_progress('Ready', 0)
+
+    def monitor_drives(self):
+        if not self.busy and not self.ejecting:
+            self.refresh_drives()
+        self.root.after(1500, self.monitor_drives)
+
+    def paste_links(self, event=None):
+        if self.busy or self.ejecting:
+            return 'break'
         try:
             text = self.root.clipboard_get().strip()
             if text:
-                if self.urls.get('1.0', 'end').strip():
-                    self.urls.insert('end', '\n')
-                self.urls.insert('end', text + '\n')
+                try:
+                    self.urls.delete('sel.first', 'sel.last')
+                except tk.TclError:
+                    pass
+                if self.urls.get('insert linestart', 'insert').strip():
+                    self.urls.insert('insert', '\n')
+                self.urls.insert('insert', '\n'.join(text.split()) + '\n')
+                self.urls.see('insert')
         except tk.TclError:
-            messagebox.showinfo('Nothing to paste', 'Copy a YouTube link first, then press Paste links.')
+            self.show_progress('Copy a YouTube link first.')
+        return 'break'
+
+    def show_done(self, complete):
+        if complete:
+            self.action_frame.pack_forget()
+            self.done_button.pack(fill='x', before=self.details_check, pady=(0, 4))
+        else:
+            self.done_button.pack_forget()
+            self.action_frame.pack(fill='x', before=self.details_check)
 
     def set_controls(self, busy):
         self.button.configure(state='disabled' if busy else 'normal')
         self.cancel_button.configure(state='normal' if busy else 'disabled')
         self.urls.configure(state='disabled' if busy else 'normal')
         self.drive.configure(state='disabled' if busy else 'normal')
-        for button in (self.paste_button, self.refresh_button, self.browse_button):
-            button.configure(state='disabled' if busy else 'normal')
+        self.update_start_state()
 
     def cancel(self):
         if self.busy and not self.cancel_event.is_set():
+            self.remove_when_stopped = True
             self.cancel_event.set()
             self.cancel_button.configure(state='disabled')
             self.show_progress('Stopping… Please keep the USB plugged in.')
@@ -348,26 +434,26 @@ class App:
         if self.ejecting:
             return
         if self.busy:
-            if messagebox.askyesno('Stop and finish?', 'Stop copying and prepare your USB drive?'):
-                self.close_when_done = True
-                self.cancel()
+            self.close_when_done = True
+            self.cancel()
         else:
             self.prepare_exit()
 
-    def prepare_exit(self):
+    def prepare_exit(self, close_app=True):
         if self.busy or self.ejecting:
             return
         destination = self.last_destination or self.drive.get()
         if not destination:
             self.root.destroy()
             return
+        self.exit_after_removal = close_app
         self.ejecting = True
         self.set_controls(True)
         self.cancel_button.configure(state='disabled')
         self.done_button.configure(state='disabled')
         self.show_progress('Preparing USB… Please wait.')
         self.progress_bar.configure(mode='indeterminate')
-        self.progress_bar.start(15)
+        self.progress_bar.start()
         threading.Thread(target=self.prepare_usb, args=(destination,), daemon=False).start()
 
     def prepare_usb(self, destination):
@@ -390,14 +476,18 @@ class App:
         folder = filedialog.askdirectory(title='Select the flash drive or a folder on it')
         if folder:
             self.drive.set(folder)
+            self.update_start_state()
 
     def refresh_drives(self):
         drives = removable_drives()
         current = self.drive.get()
         previous = self.drive.cget('values')
         self.drive.configure(values=drives)
+        if current and current not in drives and not Path(current).is_dir():
+            current = ''
         if not current or (current in previous and current not in drives):
             self.drive.set(drives[0] if len(drives) == 1 else '')
+        self.update_start_state()
 
     def start(self):
         if self.busy or self.ejecting:
@@ -420,6 +510,10 @@ class App:
             messagebox.showerror('Cannot start', str(error))
             return
         self.busy = True
+        self.download_complete = False
+        self.remove_when_stopped = False
+        self.close_when_done = False
+        self.show_done(False)
         self.cancel_event.clear()
         self.transfer_cleanup_failed = False
         self.set_controls(True)
@@ -431,7 +525,6 @@ class App:
         failures = 0
         cache = Path(os.environ.get('LOCALAPPDATA', str(Path.home()))) / 'YouTubeToUSB' / 'Downloads'
         try:
-            check_cancel(self.cancel_event)
             self.last_destination = destination
             self.usb_device = None
             self.usb_identity_error = None
@@ -483,8 +576,9 @@ class App:
                 except Exception as error:
                     failures += 1
                     self.events.put('ERROR: ' + str(error))
+            self.download_complete = failures == 0
             self.events.put(f'Finished with {failures} failed link(s). Local copies: {cache}')
-            self.report_progress('Some songs could not be copied. Open Show details below.' if failures else 'Songs copied! Press Done before unplugging your USB.', None if failures else 100)
+            self.report_progress('Some songs could not be copied. Open Show details below.' if failures else 'Your songs are ready.', None if failures else 100)
         except Cancelled:
             self.events.put('Cancelled. Completed songs are kept. Any incomplete USB copy was removed; local downloads are kept for retry.')
         except TransferCleanupError as error:
@@ -504,11 +598,12 @@ class App:
         self.progress_bar.stop()
         if percent is None and self.busy:
             self.progress_bar.configure(mode='indeterminate')
-            self.progress_bar.start(15)
+            self.progress_bar.start()
         else:
-            self.progress_bar.configure(mode='determinate', value=percent or 0)
-        suffix = f' — {percent:.0f}%' if percent is not None else ''
-        self.progress_label.configure(text=stage + suffix)
+            self.progress_bar.configure(mode='determinate')
+            self.progress_bar.set((percent or 0) / 100)
+        self.percent_label.configure(text=f'{percent:.0f}%' if percent is not None else '')
+        self.progress_label.configure(text=stage)
 
     def poll(self):
         try:
@@ -518,6 +613,7 @@ class App:
                     self.busy = False
                     self.progress_bar.stop()
                     self.set_controls(False)
+                    self.show_done(self.download_complete and not self.cancel_event.is_set())
                     if self.transfer_cleanup_failed:
                         self.close_when_done = False
                         self.show_progress('USB cleanup could not finish. Keep it connected and open Show details.')
@@ -525,25 +621,27 @@ class App:
                         self.show_progress('Stopped. Press Done before unplugging your USB.')
                     if self.close_when_done:
                         self.prepare_exit()
+                    elif self.remove_when_stopped:
+                        self.prepare_exit(close_app=False)
                 elif isinstance(event, dict):
                     if event.get('usb_ready'):
                         self.progress_bar.stop()
-                        messagebox.showinfo('Ready', 'You can unplug your USB drive now.')
-                        self.root.destroy()
-                        return
-                    elif 'usb_error' in event:
                         self.ejecting = False
-                        self.close_when_done = False
-                        self.progress_bar.stop()
-                        self.set_controls(False)
-                        self.done_button.configure(state='normal')
-                        self.log.configure(state='normal')
-                        self.log.insert('end', 'USB: ' + event['usb_error'] + '\n')
-                        self.log.configure(state='disabled')
-                        self.show_progress('USB not ready. Keep it plugged in and try Done again.')
-                        if messagebox.askyesno('Keep USB plugged in', 'Windows could not prepare your USB. Close other apps and try Done again.\n\nClose this app without preparing the USB?'):
+                        if self.exit_after_removal:
                             self.root.destroy()
                             return
+                        self.set_controls(False)
+                        self.drive.set('')
+                        self.last_destination = None
+                        self.usb_device = None
+                        self.usb_identity_error = None
+                        self.remove_when_stopped = False
+                        self.show_progress('Stopped. You can unplug your USB now.')
+                    elif 'usb_error' in event:
+                        # Missing or in-use USB: do not interrupt the user or claim safe removal.
+                        self.progress_bar.stop()
+                        self.root.destroy()
+                        return
                     elif not self.cancel_event.is_set() and not self.ejecting:
                         self.show_progress(event['stage'], event['percent'])
                 else:
@@ -559,6 +657,9 @@ class App:
 if __name__ == '__main__':
     if getattr(sys, 'frozen', False):
         os.environ['PATH'] = str(bundled_tools()) + os.pathsep + os.environ.get('PATH', '')
-    root = tk.Tk()
+    root = ctk.CTk()
     App(root)
+    if '--smoke-test' in sys.argv:
+        root.withdraw()
+        root.after(250, root.destroy)
     root.mainloop()

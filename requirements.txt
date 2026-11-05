@@ -1,1 +1,2 @@
+-r requirements-ui.txt
 yt-dlp[default]>=2025.10.22

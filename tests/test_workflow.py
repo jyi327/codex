@@ -30,7 +30,7 @@ class WorkflowTests(unittest.TestCase):
         instance.drive = MagicMock()
         instance.drive.get.return_value = 'G:\\'
         instance.drive.cget.return_value = ()
-        with patch.object(app, 'removable_drives', return_value=['E:\\']):
+        with patch.object(app, 'removable_drives', return_value=['E:\\']), patch.object(Path, 'is_dir', return_value=True):
             instance.refresh_drives()
         instance.drive.set.assert_not_called()
 
@@ -239,22 +239,64 @@ class WorkflowTests(unittest.TestCase):
                 instance = app.App(root)
             self.assertEqual(instance.drive.get(), 'E:\\')
             instance.busy = True
+            instance.prepare_exit = MagicMock()
             instance.set_controls(True)
             instance.cancel()
             self.assertTrue(instance.cancel_event.is_set())
-            self.assertEqual(str(instance.cancel_button['state']), 'disabled')
+            self.assertEqual(str(instance.cancel_button.cget('state')), 'disabled')
             instance.events.put(None)
             instance.poll()
             self.assertFalse(instance.busy)
-            self.assertEqual(str(instance.button['state']), 'normal')
-            self.assertIn('Stopped', instance.progress_label['text'])
+            self.assertEqual(str(instance.button.cget('state')), 'normal')
+            self.assertIn('Stopped', instance.progress_label.cget('text'))
             instance.busy = True
             instance.transfer_cleanup_failed = True
             instance.close_when_done = True
             instance.events.put(None)
             instance.poll()
             self.assertFalse(instance.close_when_done)
-            self.assertIn('cleanup could not finish', instance.progress_label['text'])
+            self.assertIn('cleanup could not finish', instance.progress_label.cget('text'))
+        finally:
+            root.destroy()
+
+    @unittest.skipUnless(app.sys.platform == 'win32' or os.environ.get('DISPLAY'), 'GUI requires Windows or a display')
+    def test_paste_adds_newline_and_done_is_hidden_until_complete(self):
+        root = app.tk.Tk()
+        root.withdraw()
+        try:
+            with patch.object(app, 'removable_drives', return_value=['E:\\']):
+                instance = app.App(root)
+            self.assertEqual(instance.done_button.winfo_manager(), '')
+            with patch.object(root, 'clipboard_get', return_value='https://youtu.be/one'):
+                self.assertEqual(instance.paste_links(), 'break')
+            with patch.object(root, 'clipboard_get', return_value='https://youtu.be/two'):
+                instance.paste_links()
+            self.assertEqual(instance.urls.get('1.0', 'end-1c'), 'https://youtu.be/one\nhttps://youtu.be/two\n')
+            instance.show_done(True)
+            self.assertEqual(instance.done_button.winfo_manager(), 'pack')
+            self.assertEqual(instance.action_frame.winfo_manager(), '')
+            instance.show_done(False)
+            self.assertEqual(instance.done_button.winfo_manager(), '')
+        finally:
+            root.destroy()
+
+    @unittest.skipUnless(app.sys.platform == 'win32' or os.environ.get('DISPLAY'), 'GUI requires Windows or a display')
+    def test_start_requires_usb_and_updates_on_connection(self):
+        root = app.tk.Tk()
+        root.withdraw()
+        try:
+            with patch.object(app, 'removable_drives', return_value=[]):
+                instance = app.App(root)
+            self.assertEqual(instance.button.cget('state'), 'disabled')
+            self.assertEqual(instance.progress_label.cget('text'), 'No USB connected')
+            with patch.object(app, 'removable_drives', return_value=['E:\\']):
+                instance.refresh_drives()
+            self.assertEqual(instance.button.cget('state'), 'normal')
+            self.assertEqual(instance.drive.get(), 'E:\\')
+            with patch.object(app, 'removable_drives', return_value=[]), patch.object(Path, 'is_dir', return_value=False):
+                instance.refresh_drives()
+            self.assertEqual(instance.button.cget('state'), 'disabled')
+            self.assertEqual(instance.drive.get(), '')
         finally:
             root.destroy()
 
