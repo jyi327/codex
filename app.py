@@ -5,6 +5,7 @@ import hashlib
 import os
 from pathlib import Path
 import queue
+import re
 import signal
 import shutil
 import shlex
@@ -178,15 +179,15 @@ def preparation_status(line):
     if 'retrying' in text:
         return 'Connection slow. Retrying…'
     if '[jsc' in text or 'challenge' in text:
-        return 'Checking YouTube playback…'
+        return 'Preparing song…'
     if 'downloading webpage' in text or 'extracting url' in text:
-        return 'Reading YouTube link…'
+        return 'Preparing song…'
     if 'downloading' in text and ('player' in text or 'api json' in text):
-        return 'Checking available audio…'
+        return 'Preparing song…'
     if 'playlist' in text:
-        return 'Reading playlist…'
+        return 'Preparing song…'
     if '[info]' in text and 'format' in text:
-        return 'Starting audio download…'
+        return 'Preparing song…'
     return None
 
 
@@ -199,7 +200,21 @@ def download_with_progress(command, progress, cancel=None, detail=None, ffmpeg_p
     last_output = [time.monotonic()]
     launched_at = last_output[0]
     conversion = {'active': False, 'duration': None, 'baseline': None}
-    progress('Starting downloader…')
+    display = {'rank': 0, 'label': '', 'last': None}
+    display_lock = threading.RLock()
+
+    def emit(stage, percent=None, rank=None):
+        with display_lock:
+            if rank is not None:
+                if rank < display['rank']:
+                    return
+                display['rank'] = rank
+            message = display['label'] + stage
+            if (message, percent) != display['last']:
+                display['last'] = (message, percent)
+                progress(message, percent)
+
+    emit('Preparing song…')
     if detail:
         detail('Starting downloader; waiting for its first response…')
     with subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
@@ -218,7 +233,7 @@ def download_with_progress(command, progress, cancel=None, detail=None, ffmpeg_p
                     except (OSError, subprocess.SubprocessError) as error:
                         if process.poll() is None:
                             stop_errors.append(str(error))
-                            progress('Unable to stop yet. Please wait for the current song to finish.')
+                            emit('Unable to stop yet. Please wait for the current song to finish.')
                     return
                 if ffmpeg_progress is not None and conversion['active']:
                     try:
@@ -230,7 +245,7 @@ def download_with_progress(command, progress, cancel=None, detail=None, ffmpeg_p
                             seconds = max(0, int(fields['out_time_us']) / 1_000_000)
                             last_output[0] = time.monotonic()
                             duration = conversion['duration']
-                            progress('Making the MP3 file', min(99, seconds * 100 / duration) if duration else None)
+                            emit('Making the MP3 file', min(99, seconds * 100 / duration) if duration else None, rank=2)
                             if detail and time.monotonic() - last_conversion_log >= 5:
                                 last_conversion_log = time.monotonic()
                                 detail(f'FFmpeg has converted {seconds:.1f} seconds of audio.')
@@ -238,7 +253,7 @@ def download_with_progress(command, progress, cancel=None, detail=None, ffmpeg_p
                         pass  # FFmpeg may be between writes to its progress file.
                 if time.monotonic() - last_output[0] >= QUIET_NOTICE_SECONDS and notified_at != last_output[0]:
                     notified_at = last_output[0]
-                    progress('Waiting for audio conversion… You can cancel.' if conversion['active'] else 'Still waiting… You can cancel.')
+                    emit('Waiting for audio conversion… You can cancel.' if conversion['active'] else 'Still waiting… You can cancel.')
                     if detail:
                         detail(f'No new downloader output for {QUIET_NOTICE_SECONDS} seconds. Still waiting; Cancel remains available.')
 
@@ -252,20 +267,30 @@ def download_with_progress(command, progress, cancel=None, detail=None, ffmpeg_p
                     first_output = False
                     if detail:
                         detail(f'Downloader responded after {time.monotonic() - launched_at:.1f} seconds.')
-                if not line.startswith(('USB_PROGRESS:', 'USB_CONVERT:')):
+                if not line.startswith(('USB_PROGRESS:', 'USB_CONVERT:', 'USB_TRACK:')):
                     text = line.rstrip()
                     if text:
                         recent.append(text)
                         if detail:
                             detail(text)
-                if line.startswith('USB_PROGRESS:'):
+                if line.startswith('USB_TRACK:'):
+                    fields = line.strip().split(':', 1)[1].split('|')
+                    with display_lock:
+                        display['rank'] = 0
+                        display['last'] = None
+                        display['label'] = f'Song {fields[1]} of {fields[2]} · ' if len(fields) >= 3 and fields[1].isdigit() and fields[2].isdigit() and int(fields[2]) > 1 else ''
+                        conversion['active'] = False
+                    if detail:
+                        detail('Processing song: ' + ' | '.join(fields))
+                    emit('Downloading audio', 0, rank=1)
+                elif line.startswith('USB_PROGRESS:'):
                     parts = line.strip().split(':', 1)[1].split('|')
                     try:
                         downloaded = float(parts[0])
                         total = next(float(value) for value in parts[1:] if value not in ('NA', 'None', '') and float(value) > 0)
-                        progress('Downloading this song', max(0, min(100, downloaded * 100 / total)))
+                        emit('Downloading this song', max(0, min(100, downloaded * 100 / total)), rank=1)
                     except (ValueError, StopIteration, IndexError):
-                        progress('Downloading this song')
+                        emit('Downloading this song', rank=1)
                 elif line.startswith('USB_CONVERT:'):
                     fields = line.strip().split(':', 1)[1].split('|')
                     processor, status, duration = (fields + ['NA', 'NA'])[:3] if len(fields) > 1 else ('ExtractAudio', fields[0], 'NA')
@@ -283,15 +308,19 @@ def download_with_progress(command, progress, cancel=None, detail=None, ffmpeg_p
                                 conversion['baseline'] = (stat.st_mtime_ns, stat.st_size)
                             except OSError:
                                 conversion['baseline'] = None
-                        progress('MP3 ready. Finishing…' if status == 'finished' else 'Making the MP3 file')
-                    elif not conversion['active']:
-                        progress('Finishing download…')
+                        emit('MP3 ready. Finishing…' if status == 'finished' else 'Making the MP3 file', rank=3 if status == 'finished' else 2)
                 elif line.startswith('[ExtractAudio]'):
-                    progress('Making the MP3 file')
+                    emit('Making the MP3 file', rank=2)
                 else:
-                    stage = preparation_status(line)
-                    if stage:
-                        progress(stage)
+                    item = re.search(r'Downloading item (\d+) of (\d+)', line)
+                    if item:
+                        with display_lock:
+                            display['label'] = f'Song {item[1]} of {item[2]} · '
+                        emit('Preparing song…')
+                    else:
+                        stage = preparation_status(line)
+                        if stage:
+                            emit(stage, rank=None if 'Retrying' in stage else 0)
             result = subprocess.CompletedProcess(command, process.wait(), '', '\n'.join(recent))
         finally:
             done.set()
@@ -306,6 +335,9 @@ def make_download_command(url, cache, manifest, ffmpeg_progress):
     location = bundled_tools() if getattr(sys, 'frozen', False) else Path(shutil.which('ffmpeg') or 'ffmpeg').resolve().parent
     return downloader_command() + [
         '--ignore-config', '--js-runtimes', 'node', '--ffmpeg-location', str(location),
+        '--yes-playlist' if urlparse(url).path.rstrip('/') == '/playlist' else '--no-playlist',
+        '--no-simulate', '--print', 'before_dl:USB_TRACK:%(id)s|%(playlist_index)s|%(playlist_count)s',
+        '--retries', '3', '--fragment-retries', '3', '--extractor-retries', '2', '--socket-timeout', '20',
         '--no-quiet', '--progress', '--newline', '--no-colors', '--progress-delta', '0.3',
         '--progress-template', 'download:USB_PROGRESS:%(progress.downloaded_bytes)s|%(progress.total_bytes)s|%(progress.total_bytes_estimate)s',
         '--progress-template', 'postprocess:USB_CONVERT:%(progress.postprocessor)s|%(progress.status)s|%(info.duration)s',
@@ -679,7 +711,11 @@ class App:
                         manifest = Path(work) / 'files.txt'
                         ffmpeg_progress = Path(work) / 'ffmpeg-progress.txt'
                         command = make_download_command(url, cache, manifest, ffmpeg_progress)
-                        result = download_with_progress(command, self.report_progress, self.cancel_event, self.log_detail, ffmpeg_progress)
+                        def link_progress(stage, percent=None):
+                            prefix = f'Link {link_index} of {len(urls)} · ' if len(urls) > 1 else ''
+                            self.report_progress(prefix + stage, percent)
+
+                        result = download_with_progress(command, link_progress, self.cancel_event, self.log_detail, ffmpeg_progress)
                         check_cancel(self.cancel_event)
                         # Even a partially failed playlist may contain completed tracks.
                         files = manifest.read_text(encoding='utf-8').splitlines() if manifest.exists() else []

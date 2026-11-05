@@ -63,7 +63,7 @@ class WorkflowTests(unittest.TestCase):
         result = app.download_with_progress([app.sys.executable, '-c', code], lambda stage, percent=None: updates.append((stage, percent)))
         self.assertEqual(result.returncode, 2)
         self.assertIn('test error', result.stderr)
-        self.assertEqual(updates, [('Starting downloader…', None), ('Downloading this song', 25), ('Downloading this song', 75), ('Downloading this song', None), ('Making the MP3 file', None)])
+        self.assertEqual(updates, [('Preparing song…', None), ('Downloading this song', 25), ('Downloading this song', 75), ('Downloading this song', None), ('Making the MP3 file', None)])
 
     def test_cancel_stops_a_silent_download(self):
         cancel = threading.Event()
@@ -92,7 +92,7 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0)
         self.assertIn('[youtube] abc: Downloading webpage', logs)
         self.assertIn('WARNING: Retrying (1/3)', logs)
-        self.assertIn('Reading YouTube link…', stages)
+        self.assertIn('Preparing song…', stages)
         self.assertIn('Connection slow. Retrying…', stages)
 
     def test_silent_downloader_reports_wait_without_fake_percentage(self):
@@ -111,12 +111,44 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0)
         self.assertIn(('Making the MP3 file', 50), updates)
         self.assertIn(('MP3 ready. Finishing…', None), updates)
-        self.assertEqual(updates[-1], ('Finishing download…', None))
+        self.assertEqual(updates[-1], ('MP3 ready. Finishing…', None))
         self.assertTrue(any('ExtractAudio finished' in line for line in logs))
 
     @unittest.skipUnless(importlib.util.find_spec('yt_dlp'), 'Source yt-dlp unavailable; Windows build separately tests bundled conversion')
     def test_offline_downloader_conversion_and_copy(self):
         app.conversion_smoke_test()
+
+    def test_single_video_link_does_not_download_its_surrounding_playlist(self):
+        command = app.make_download_command('https://www.youtube.com/watch?v=song&list=playlist', Path('cache'), Path('manifest'), Path('progress'))
+        self.assertIn('--no-playlist', command)
+        self.assertNotIn('--yes-playlist', command)
+        command = app.make_download_command('https://www.youtube.com/playlist?list=playlist', Path('cache'), Path('manifest'), Path('progress'))
+        self.assertIn('--yes-playlist', command)
+        self.assertIn('--no-simulate', command)
+
+    def test_status_does_not_cycle_backwards_within_a_song(self):
+        updates = []
+        lines = [
+            '[youtube] Extracting URL: example',
+            '[youtube] example: Downloading webpage',
+            'USB_TRACK:first|1|2',
+            'USB_PROGRESS:50|100|NA',
+            'USB_CONVERT:ExtractAudio|started|10',
+            'USB_CONVERT:ExtractAudio|finished|10',
+            'USB_CONVERT:MoveFiles|started|10',
+            '[youtube] example: Downloading player API JSON',
+            '[ExtractAudio] MP3 already exists',
+            'USB_TRACK:second|2|2',
+            'USB_PROGRESS:25|100|NA',
+        ]
+        code = 'lines = ' + repr(lines) + '\nfor line in lines: print(line, flush=True)'
+        result = app.download_with_progress([app.sys.executable, '-c', code], lambda stage, percent=None: updates.append((stage, percent)))
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(updates.count(('Preparing song…', None)), 1)
+        ready = updates.index(('Song 1 of 2 · MP3 ready. Finishing…', None))
+        second = updates.index(('Song 2 of 2 · Downloading audio', 0))
+        self.assertEqual(second, ready + 1)
+        self.assertIn(('Song 2 of 2 · Downloading this song', 25), updates)
 
     def test_cancel_stops_conversion_child_process(self):
         with tempfile.TemporaryDirectory() as work:
