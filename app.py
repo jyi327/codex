@@ -92,12 +92,13 @@ class App:
         ttk.Label(frame, text='YouTube links (one per line; playlists are supported)').pack(anchor='w')
         self.urls = tk.Text(frame, height=7)
         self.urls.pack(fill='x', pady=8)
-        ttk.Label(frame, text='USB drive destination (MP3s go into its Music folder)').pack(anchor='w')
+        ttk.Label(frame, text='USB destination (MP3s go directly here; one detected drive is selected automatically)').pack(anchor='w')
         row = ttk.Frame(frame)
         row.pack(fill='x', pady=8)
-        self.drive = ttk.Combobox(row, values=removable_drives())
+        self.drive = ttk.Combobox(row)
+        self.refresh_drives()
         self.drive.pack(side='left', fill='x', expand=True)
-        ttk.Button(row, text='Refresh', command=lambda: self.drive.configure(values=removable_drives())).pack(side='left', padx=6)
+        ttk.Button(row, text='Refresh', command=self.refresh_drives).pack(side='left', padx=6)
         ttk.Button(row, text='Browse…', command=self.browse).pack(side='left')
         ttk.Label(frame, text='Use only audio you own or have permission to download.').pack(anchor='w')
         self.button = ttk.Button(frame, text='Convert and copy', command=self.start)
@@ -119,9 +120,19 @@ class App:
         if folder:
             self.drive.set(folder)
 
+    def refresh_drives(self):
+        drives = removable_drives()
+        current = self.drive.get()
+        previous = self.drive.cget('values')
+        self.drive.configure(values=drives)
+        if not current or (current in previous and current not in drives):
+            self.drive.set(drives[0] if len(drives) == 1 else '')
+
     def start(self):
         try:
             urls = validate_urls(self.urls.get('1.0', 'end'))
+            # Also detect drives plugged in after the app opened.
+            self.refresh_drives()
             destination = Path(self.drive.get())
             if not self.drive.get() or not destination.is_dir():
                 raise ValueError('Select a connected flash drive first.')
@@ -167,7 +178,7 @@ class App:
                                 raise ValueError('Unexpected downloader output path.')
                             if not destination.is_dir():
                                 raise OSError('Destination disconnected. Local MP3 files are retained.')
-                            self.events.put(copy_verified(source, destination / 'Music'))
+                            self.events.put(copy_verified(source, destination))
                         if result.returncode:
                             raise RuntimeError(result.stderr.strip()[-2500:] or 'Download failed.')
                         if not files:

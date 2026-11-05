@@ -1,10 +1,10 @@
 # YouTube to USB MP3
 
-Windows desktop app for converting permitted YouTube audio to 192 kbps MP3 and copying it into a selected flash drive's `Music` folder. Supports individual links and playlists. Local downloads are retained; existing identical files are skipped, different files with the same name produce an error. Transfers are checked with SHA-256. The app never formats drives or deletes source audio.
+Windows desktop app for converting permitted YouTube audio to 192 kbps MP3 and copying it directly into the flash drive's root folder. Supports individual links and playlists. Local downloads are retained; existing identical files are skipped, different files with the same name produce an error. Transfers are checked with SHA-256. The app never formats drives or deletes source audio.
 
 ## Portable Windows app (no installation)
 
-Download `YouTubeToUSB-Windows-x64.zip` from a successful GitHub Actions **Build portable Windows app** run. Extract the entire ZIP, open its `YouTubeToUSB` folder, and double-click `YouTubeToUSB.exe`. Python, FFmpeg, Node.js, and yt-dlp are bundled: no administrator access, installer, or separate runtime installation is required. Keep the `_internal` folder beside the EXE. Paste links, choose your flash drive, and click **Convert and copy**.
+Download `YouTubeToUSB-Windows-x64.zip` from a successful GitHub Actions **Build portable Windows app** run. Extract the entire ZIP, open its `YouTubeToUSB` folder, and double-click `YouTubeToUSB.exe`. Python, FFmpeg, Node.js, and yt-dlp are bundled: no administrator access, installer, or separate runtime installation is required. Keep the `_internal` folder beside the EXE. Paste links and click **Convert and copy**. When exactly one removable drive is detected, it is selected automatically. With multiple drives, choose the destination first. MP3s go directly into the drive root; no Music subfolder is created.
 
 This is a portable folder, not a single-file executable. It requires 64-bit Windows 10/11 and Internet access for YouTube. It stores downloaded audio in your local app-data folder. Windows may show a warning for the unsigned executable. Do not bypass organizational security policies. To update the downloader, download a newly built portable package.
 
@@ -18,7 +18,7 @@ Before distributing publicly, include the licenses and comply with the redistrib
 
 ## Run from source (developer option)
 
-Requires Windows 10/11 with App Installer (`winget`). Run `Setup.cmd` once to install Python, FFmpeg, and Node.js using verified winget packages. Follow its instructions to install the Python dependency in a fresh terminal. Then double-click `Start.cmd`, paste links, select your flash drive, and click **Convert and copy**. Some USB disks appear as fixed disks: use Browse to select those explicitly. Safely eject the drive after completion.
+Requires Windows 10/11 with App Installer (`winget`). Run `Setup.cmd` once to install Python, FFmpeg, and Node.js using verified winget packages. Follow its instructions to install the Python dependency in a fresh terminal. Then double-click `Start.cmd`, paste links and click **Convert and copy**. A single detected removable drive is selected automatically; otherwise select the destination. MP3s go directly into the selected folder. Some USB disks appear as fixed disks: use Browse to select those explicitly. Safely eject the drive after completion.
 
 Downloads stay in `%LOCALAPPDATA%\YouTubeToUSB\Downloads`. If a drive disconnects, reconnect it and rerun the links to retry. Errors appear in the app. Restricted, removed, or login-required videos can fail; this tool does not bypass access restrictions. Use only content you own or have permission to download.
 
