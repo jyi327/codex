@@ -46,7 +46,7 @@ class WorkflowTests(unittest.TestCase):
 
             def download(command, progress, cancel, detail, ffmpeg_progress):
                 cache = Path(command[command.index('--paths') + 1])
-                source = cache / 'song.mp3'
+                source = cache / 'song [abcdefghijk].mp3'
                 source.write_bytes(b'downloaded audio')
                 manifest = Path(command[command.index('--print-to-file') + 2])
                 manifest.write_text(str(source) + '\n', encoding='utf-8')
@@ -340,19 +340,67 @@ class WorkflowTests(unittest.TestCase):
         try:
             with patch.object(app, 'removable_drives', return_value=['E:\\']):
                 instance = app.App(root)
-            self.assertEqual(instance.done_button.winfo_manager(), '')
+            self.assertEqual(instance.complete_frame.winfo_manager(), '')
             with patch.object(root, 'clipboard_get', return_value='https://youtu.be/one'):
                 self.assertEqual(instance.paste_links(), 'break')
             with patch.object(root, 'clipboard_get', return_value='https://youtu.be/two'):
                 instance.paste_links()
             self.assertEqual(instance.urls.get('1.0', 'end-1c'), 'https://youtu.be/one\nhttps://youtu.be/two\n')
             instance.show_done(True)
-            self.assertEqual(instance.done_button.winfo_manager(), 'pack')
+            self.assertEqual(instance.complete_frame.winfo_manager(), 'pack')
             self.assertEqual(instance.action_frame.winfo_manager(), '')
             instance.show_done(False)
-            self.assertEqual(instance.done_button.winfo_manager(), '')
+            self.assertEqual(instance.complete_frame.winfo_manager(), '')
         finally:
             root.destroy()
+
+    @unittest.skipUnless(app.sys.platform == 'win32' or os.environ.get('DISPLAY'), 'GUI requires Windows or a display')
+    def test_next_song_clears_links_and_keeps_usb_connected(self):
+        root = app.tk.Tk()
+        root.withdraw()
+        try:
+            with patch.object(app, 'removable_drives', return_value=['E:\\']):
+                instance = app.App(root)
+                instance.urls.insert('1.0', 'https://youtu.be/finished')
+                instance.download_complete = True
+                instance.last_destination = 'E:\\'
+                instance.usb_device = object()
+                original_device = instance.usb_device
+                instance.show_done(True)
+                with patch.object(app.windows_usb, 'eject_usb') as eject:
+                    instance.next_song()
+                eject.assert_not_called()
+            self.assertEqual(instance.urls.get('1.0', 'end-1c'), '')
+            self.assertEqual(instance.drive.get(), 'E:\\')
+            self.assertIs(instance.usb_device, original_device)
+            self.assertEqual(instance.last_destination, 'E:\\')
+            self.assertFalse(instance.download_complete)
+            self.assertEqual(instance.action_frame.winfo_manager(), 'pack')
+            self.assertEqual(instance.complete_frame.winfo_manager(), '')
+            self.assertEqual(instance.progress_label.cget('text'), 'Ready')
+            self.assertEqual(instance.percent_label.cget('text'), '0%')
+            self.assertEqual(instance.button.cget('state'), 'normal')
+        finally:
+            root.destroy()
+
+    def test_usb_filename_removes_only_video_id(self):
+        self.assertEqual(app.clean_usb_filename('My Song [Tm3gvy-qpks].mp3'), 'My Song.mp3')
+        self.assertEqual(app.clean_usb_filename('夜曲 [Live] [abcdefghijk].mp3'), '夜曲 [Live].mp3')
+        self.assertEqual(app.clean_usb_filename('My Song [Live].mp3'), 'My Song [Live].mp3')
+
+    def test_clean_usb_name_does_not_overwrite_another_song(self):
+        with tempfile.TemporaryDirectory() as work:
+            root = Path(work)
+            source = root / 'Song [abcdefghijk].mp3'
+            source.write_bytes(b'new audio')
+            folder = root / 'usb'
+            folder.mkdir()
+            existing = folder / 'Song.mp3'
+            existing.write_bytes(b'existing different audio')
+            with self.assertRaises(FileExistsError):
+                app.copy_verified(source, folder, filename=app.clean_usb_filename(source.name))
+            self.assertEqual(existing.read_bytes(), b'existing different audio')
+            self.assertEqual(source.read_bytes(), b'new audio')
 
     @unittest.skipUnless(app.sys.platform == 'win32' or os.environ.get('DISPLAY'), 'GUI requires Windows or a display')
     def test_start_requires_usb_and_updates_on_connection(self):

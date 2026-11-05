@@ -100,19 +100,27 @@ def publish_verified(temporary, target):
     sync_directory(target.parent)
 
 
-def copy_verified(source, folder, progress=None, cancel=None):
+def clean_usb_filename(filename):
+    """Remove only the downloader's trailing YouTube video ID."""
+    return re.sub(r' \[[A-Za-z0-9_-]{11}\](?=\.mp3$)', '', filename, flags=re.IGNORECASE)
+
+
+def copy_verified(source, folder, progress=None, cancel=None, filename=None):
     def report(stage, percent=None):
         if progress:
             progress(stage, percent)
 
     check_cancel(cancel)
     folder.mkdir(parents=True, exist_ok=True)
-    target = folder / source.name
+    filename = filename or source.name
+    if Path(filename).name != filename or '\\' in filename or filename in ('.', '..'):
+        raise ValueError('Invalid destination filename.')
+    target = folder / filename
     if target.exists():
         report('Checking existing file')
         if digest(source, cancel) == digest(target, cancel):
             report('Already present', 100)
-            return 'Already present: ' + source.name
+            return 'Already present: ' + target.name
         raise FileExistsError('Different file already exists: ' + str(target))
     if shutil.disk_usage(folder).free < source.stat().st_size + 1024 * 1024:
         raise OSError('Not enough free space on the selected drive.')
@@ -154,7 +162,7 @@ def copy_verified(source, folder, progress=None, cancel=None):
         except OSError as error:
             raise TransferCleanupError('USB cleanup could not finish. Keep the drive connected. Temporary file: ' + str(temporary)) from error
     report('Copy verified', 100)
-    return 'Copied and verified: ' + source.name
+    return 'Copied and verified: ' + target.name
 
 
 def stop_process_tree(process):
@@ -506,7 +514,11 @@ class App:
         self.button.pack(side='left', fill='x', expand=True, padx=(0, 8))
         self.cancel_button = ctk.CTkButton(self.action_frame, text='×  CANCEL', height=60, corner_radius=16, border_width=1, border_color='#c6d6ec', font=(interface_font, 20, 'bold'), fg_color='white', hover_color='#e8f0fc', text_color='#526177', text_color_disabled='#9aa9bd', command=self.cancel, state='disabled')
         self.cancel_button.pack(side='left', fill='x', expand=True, padx=(8, 0))
-        self.done_button = ctk.CTkButton(frame, text='✓  DONE', height=60, corner_radius=16, font=(interface_font, 20, 'bold'), fg_color='#2563eb', hover_color='#1d4ed8', text_color='white', command=self.close)
+        self.complete_frame = ctk.CTkFrame(frame, fg_color='transparent')
+        self.next_button = ctk.CTkButton(self.complete_frame, text='NEXT SONG', height=60, corner_radius=16, font=(interface_font, 20, 'bold'), fg_color='#2563eb', hover_color='#1d4ed8', text_color='white', command=self.next_song)
+        self.next_button.pack(side='left', fill='x', expand=True, padx=(0, 8))
+        self.done_button = ctk.CTkButton(self.complete_frame, text='✓  DONE', height=60, corner_radius=16, border_width=1, border_color='#c6d6ec', font=(interface_font, 20, 'bold'), fg_color='white', hover_color='#e8f0fc', text_color='#526177', command=self.close)
+        self.done_button.pack(side='left', fill='x', expand=True, padx=(8, 0))
         self.details_visible = tk.BooleanVar(value=False)
         self.details_check = ctk.CTkButton(frame, text='⌄  Details', font=(interface_font, 14), text_color='#64748b', fg_color='transparent', hover_color='#e2ecfb', width=100, height=30, anchor='w', command=self.toggle_details)
         self.details_check.pack(anchor='w', pady=(16, 0))
@@ -573,16 +585,35 @@ class App:
     def show_done(self, complete):
         if complete:
             self.action_frame.pack_forget()
-            self.done_button.pack(fill='x', before=self.details_check, pady=(0, 4))
+            self.complete_frame.pack(fill='x', before=self.details_check, pady=(0, 4))
         else:
-            self.done_button.pack_forget()
+            self.complete_frame.pack_forget()
             self.action_frame.pack(fill='x', before=self.details_check)
+
+    def next_song(self):
+        if self.busy or self.ejecting:
+            return
+        self.download_complete = False
+        self.cancel_event.clear()
+        self.remove_when_stopped = False
+        self.close_when_done = False
+        self.urls.configure(state='normal')
+        self.urls.delete('1.0', 'end')
+        self.show_done(False)
+        self.refresh_drives()
+        self.set_controls(False)
+        if self.drive.get():
+            self.show_progress('Ready', 0)
+        else:
+            self.show_progress('No USB connected')
+        self.urls.focus_set()
 
     def set_controls(self, busy):
         self.button.configure(state='disabled' if busy else 'normal')
         self.cancel_button.configure(state='normal' if busy else 'disabled')
         self.urls.configure(state='disabled' if busy else 'normal')
         self.drive.configure(state='disabled' if busy else 'normal')
+        self.next_button.configure(state='disabled' if busy else 'normal')
         self.update_start_state()
 
     def cancel(self):
@@ -728,8 +759,9 @@ class App:
                                 raise ValueError('Unexpected downloader output path.')
                             if not destination.is_dir():
                                 raise OSError('Destination disconnected. Local MP3 files are retained.')
-                            self.report_progress('Copying: ' + source.name, 0)
-                            self.events.put(copy_verified(source, destination, self.report_progress, self.cancel_event))
+                            filename = clean_usb_filename(source.name)
+                            self.report_progress('Copying: ' + filename, 0)
+                            self.events.put(copy_verified(source, destination, self.report_progress, self.cancel_event, filename=filename))
                         if result.returncode:
                             raise RuntimeError(result.stderr.strip()[-2500:] or 'Download failed.')
                         if not files:
