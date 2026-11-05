@@ -1,0 +1,40 @@
+name: Build portable Windows app
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - app.py
+      - build-windows.ps1
+      - .github/workflows/windows-portable.yml
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install FFmpeg for building
+        shell: pwsh
+        run: |
+          choco install ffmpeg --yes --no-progress
+          if ($LASTEXITCODE -ne 0) { throw 'FFmpeg installation failed' }
+          # Bundle the real binaries, not Chocolatey's command shims.
+          $binary = Get-ChildItem "$env:ChocolateyInstall\lib\ffmpeg" -Filter ffmpeg.exe -Recurse | Select-Object -First 1
+          if (-not $binary) { throw 'Actual FFmpeg binary not found' }
+          $binary.DirectoryName | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+      - name: Test conversion and copying
+        run: python -m unittest discover -s tests -v
+      - name: Package standalone application
+        shell: pwsh
+        run: ./build-windows.ps1
+      - uses: actions/upload-artifact@v4
+        with:
+          name: YouTubeToUSB-Windows-x64
+          path: dist/YouTubeToUSB-Windows-x64.zip
+          if-no-files-found: error
