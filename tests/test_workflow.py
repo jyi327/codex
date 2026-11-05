@@ -384,9 +384,10 @@ class WorkflowTests(unittest.TestCase):
             root.destroy()
 
     def test_usb_filename_removes_only_video_id(self):
-        self.assertEqual(app.clean_usb_filename('My Song [Tm3gvy-qpks].mp3'), 'My Song.mp3')
-        self.assertEqual(app.clean_usb_filename('夜曲 [Live] [abcdefghijk].mp3'), '夜曲 [Live].mp3')
-        self.assertEqual(app.clean_usb_filename('My Song [Live].mp3'), 'My Song [Live].mp3')
+        self.assertEqual(app.clean_usb_filename('My Song [Tm3gvy-qpks].mp3'), 'MySong.mp3')
+        self.assertEqual(app.clean_usb_filename('夜曲 [Live] [abcdefghijk].mp3'), '夜曲[Live].mp3')
+        self.assertEqual(app.clean_usb_filename('My Song [Live].mp3'), 'MySong[Live].mp3')
+        self.assertEqual(app.clean_usb_filename('My\tSong\u3000Title [abcdefghijk].mp3'), 'MySongTitle.mp3')
 
     def test_clean_usb_name_does_not_overwrite_another_song(self):
         with tempfile.TemporaryDirectory() as work:

@@ -101,8 +101,9 @@ def publish_verified(temporary, target):
 
 
 def clean_usb_filename(filename):
-    """Remove only the downloader's trailing YouTube video ID."""
-    return re.sub(r' \[[A-Za-z0-9_-]{11}\](?=\.mp3$)', '', filename, flags=re.IGNORECASE)
+    """Remove the downloader's trailing video ID and spaces for USB filenames."""
+    title = re.sub(r' \[[A-Za-z0-9_-]{11}\](?=\.mp3$)', '', filename, flags=re.IGNORECASE)
+    return re.sub(r'\s+', '', title)
 
 
 def copy_verified(source, folder, progress=None, cancel=None, filename=None):
