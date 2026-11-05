@@ -604,6 +604,8 @@ class App:
     def prepare_exit(self, close_app=True):
         if self.busy or self.ejecting:
             return
+        if close_app:
+            self.root.withdraw()
         destination = self.last_destination or self.drive.get()
         if not destination:
             self.root.destroy()

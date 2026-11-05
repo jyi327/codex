@@ -141,6 +141,24 @@ class SafeRemovalTests(unittest.TestCase):
         info.assert_not_called()
         instance.root.destroy.assert_called_once()
 
+    def test_done_hides_window_before_background_removal(self):
+        instance = app.App.__new__(app.App)
+        instance.busy = False
+        instance.ejecting = False
+        instance.last_destination = 'E:\\'
+        instance.root = MagicMock()
+        for name in ('set_controls', 'cancel_button', 'done_button', 'show_progress', 'progress_bar'):
+            setattr(instance, name, MagicMock())
+        with patch.object(app.threading, 'Thread') as worker:
+            def start():
+                instance.root.withdraw.assert_called_once()
+                instance.root.destroy.assert_not_called()
+            worker.return_value.start.side_effect = start
+            instance.prepare_exit()
+        self.assertTrue(instance.exit_after_removal)
+        self.assertTrue(instance.ejecting)
+        worker.assert_called_once_with(target=instance.prepare_usb, args=('E:\\',), daemon=False)
+
 
 if __name__ == '__main__':
     unittest.main()
