@@ -14,6 +14,7 @@ import tempfile
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 from urllib.parse import urlparse
+import windows_usb
 
 
 def bundled_tools():
@@ -228,9 +229,13 @@ class App:
         self.busy = False
         self.close_when_done = False
         self.transfer_cleanup_failed = False
+        self.ejecting = False
+        self.usb_device = None
+        self.usb_identity_error = None
+        self.last_destination = None
         root.title('Songs to your USB drive')
-        root.geometry('860x740')
-        root.minsize(680, 620)
+        root.geometry('820x680')
+        root.minsize(680, 560)
         root.option_add('*Font', ('Segoe UI', 14))
         style = ttk.Style(root)
         style.theme_use('clam')
@@ -254,7 +259,7 @@ class App:
         canvas.bind('<Configure>', lambda event: canvas.itemconfigure(page, width=event.width))
         root.bind('<MouseWheel>', lambda event: canvas.yview_scroll(-int(event.delta / 120), 'units') if not isinstance(event.widget, tk.Text) else None)
         ttk.Label(frame, text='Songs to your USB drive', style='Title.TLabel').pack(anchor='w')
-        ttk.Label(frame, text='Plug in your USB drive. Then follow these three steps.').pack(anchor='w', pady=(4, 16))
+        ttk.Label(frame, text='Plug in your USB drive to begin.').pack(anchor='w', pady=(4, 16))
         link_row = ttk.Frame(frame)
         link_row.pack(fill='x')
         ttk.Label(link_row, text='1. Paste your YouTube links', style='Step.TLabel').pack(side='left')
@@ -269,7 +274,7 @@ class App:
         self.urls.configure(yscrollcommand=link_scroll.set)
         self.urls.pack(side='left', fill='both', expand=True)
         link_scroll.pack(side='right', fill='y')
-        ttk.Label(frame, text='Put each link on a new line. A playlist link works too.').pack(anchor='w', pady=(0, 12))
+        ttk.Label(frame, text='One link per line.').pack(anchor='w', pady=(0, 12))
         ttk.Label(frame, text='2. Check your USB drive', style='Step.TLabel').pack(anchor='w')
         row = ttk.Frame(frame)
         row.pack(fill='x', pady=8)
@@ -280,7 +285,6 @@ class App:
         self.refresh_button.pack(side='left', padx=8)
         self.browse_button = ttk.Button(row, text='Choose folder', command=self.browse)
         self.browse_button.pack(side='left')
-        ttk.Label(frame, text='One USB drive is selected automatically. Songs go directly onto it.').pack(anchor='w', pady=(0, 12))
         ttk.Label(frame, text='3. Start copying your songs', style='Step.TLabel').pack(anchor='w')
         buttons = ttk.Frame(frame)
         buttons.pack(fill='x', pady=8)
@@ -288,12 +292,13 @@ class App:
         self.button.pack(side='left', fill='x', expand=True, padx=(0, 6))
         self.cancel_button = ttk.Button(buttons, text='Cancel', style='Stop.TButton', command=self.cancel, state='disabled')
         self.cancel_button.pack(side='left', fill='x', expand=True, padx=(6, 0))
+        self.done_button = ttk.Button(frame, text='Done', style='Start.TButton', command=self.close)
+        self.done_button.pack(fill='x', pady=(4, 0))
         self.progress_label = ttk.Label(frame, text='Ready. Paste a link above to begin.', style='Step.TLabel', wraplength=620)
         self.progress_label.pack(anchor='w', pady=(10, 4))
         self.progress_bar = ttk.Progressbar(frame, maximum=100, mode='determinate')
         self.progress_bar.pack(fill='x', pady=(4, 8))
-        ttk.Label(frame, text='Wait for Done or Stopped. Then use Windows Eject before unplugging.').pack(anchor='w')
-        ttk.Label(frame, text='Only download songs you own or have permission to download.').pack(anchor='w', pady=(4, 6))
+        ttk.Label(frame, text='Press Done before unplugging.').pack(anchor='w', pady=(0, 6))
         self.details_visible = tk.BooleanVar(value=False)
         ttk.Checkbutton(frame, text='Show details', variable=self.details_visible, command=self.toggle_details).pack(anchor='w')
         self.details_frame = ttk.Frame(frame)
@@ -340,12 +345,46 @@ class App:
             self.show_progress('Stopping… Please keep the USB plugged in.')
 
     def close(self):
+        if self.ejecting:
+            return
         if self.busy:
-            if messagebox.askyesno('Stop and close?', 'Stop copying and close the app? Songs already copied will stay on your USB drive.'):
+            if messagebox.askyesno('Stop and finish?', 'Stop copying and prepare your USB drive?'):
                 self.close_when_done = True
                 self.cancel()
         else:
+            self.prepare_exit()
+
+    def prepare_exit(self):
+        if self.busy or self.ejecting:
+            return
+        destination = self.last_destination or self.drive.get()
+        if not destination:
             self.root.destroy()
+            return
+        self.ejecting = True
+        self.set_controls(True)
+        self.cancel_button.configure(state='disabled')
+        self.done_button.configure(state='disabled')
+        self.show_progress('Preparing USB… Please wait.')
+        self.progress_bar.configure(mode='indeterminate')
+        self.progress_bar.start(15)
+        threading.Thread(target=self.prepare_usb, args=(destination,), daemon=False).start()
+
+    def prepare_usb(self, destination):
+        try:
+            if self.last_destination is not None:
+                if self.usb_identity_error:
+                    raise self.usb_identity_error
+                device = self.usb_device
+                if device is None:
+                    raise OSError('The original drive could not be identified. Use Windows safe removal before unplugging.')
+            else:
+                device = windows_usb.describe_usb(destination)
+            windows_usb.eject_usb(device)
+        except Exception as error:
+            self.events.put({'usb_error': str(error)})
+        else:
+            self.events.put({'usb_ready': True})
 
     def browse(self):
         folder = filedialog.askdirectory(title='Select the flash drive or a folder on it')
@@ -361,7 +400,7 @@ class App:
             self.drive.set(drives[0] if len(drives) == 1 else '')
 
     def start(self):
-        if self.busy:
+        if self.busy or self.ejecting:
             return
         try:
             urls = validate_urls(self.urls.get('1.0', 'end'))
@@ -392,6 +431,16 @@ class App:
         failures = 0
         cache = Path(os.environ.get('LOCALAPPDATA', str(Path.home()))) / 'YouTubeToUSB' / 'Downloads'
         try:
+            check_cancel(self.cancel_event)
+            self.last_destination = destination
+            self.usb_device = None
+            self.usb_identity_error = None
+            try:
+                # Remember the actual device before copying, not just its drive letter.
+                self.usb_device = windows_usb.describe_usb(destination)
+            except Exception as error:
+                self.usb_identity_error = error
+                self.events.put('Automatic safe removal unavailable: ' + str(error))
             check_cancel(self.cancel_event)
             cache.mkdir(parents=True, exist_ok=True)
             for link_index, url in enumerate(urls, 1):
@@ -435,7 +484,7 @@ class App:
                     failures += 1
                     self.events.put('ERROR: ' + str(error))
             self.events.put(f'Finished with {failures} failed link(s). Local copies: {cache}')
-            self.report_progress('Some songs could not be copied. Open Show details below.' if failures else 'Done! Your songs are on the USB drive.', None if failures else 100)
+            self.report_progress('Some songs could not be copied. Open Show details below.' if failures else 'Songs copied! Press Done before unplugging your USB.', None if failures else 100)
         except Cancelled:
             self.events.put('Cancelled. Completed songs are kept. Any incomplete USB copy was removed; local downloads are kept for retry.')
         except TransferCleanupError as error:
@@ -473,12 +522,29 @@ class App:
                         self.close_when_done = False
                         self.show_progress('USB cleanup could not finish. Keep it connected and open Show details.')
                     elif self.cancel_event.is_set():
-                        self.show_progress('Stopped. Use Windows Eject before unplugging your USB.')
+                        self.show_progress('Stopped. Press Done before unplugging your USB.')
                     if self.close_when_done:
+                        self.prepare_exit()
+                elif isinstance(event, dict):
+                    if event.get('usb_ready'):
+                        self.progress_bar.stop()
+                        messagebox.showinfo('Ready', 'You can unplug your USB drive now.')
                         self.root.destroy()
                         return
-                elif isinstance(event, dict):
-                    if not self.cancel_event.is_set():
+                    elif 'usb_error' in event:
+                        self.ejecting = False
+                        self.close_when_done = False
+                        self.progress_bar.stop()
+                        self.set_controls(False)
+                        self.done_button.configure(state='normal')
+                        self.log.configure(state='normal')
+                        self.log.insert('end', 'USB: ' + event['usb_error'] + '\n')
+                        self.log.configure(state='disabled')
+                        self.show_progress('USB not ready. Keep it plugged in and try Done again.')
+                        if messagebox.askyesno('Keep USB plugged in', 'Windows could not prepare your USB. Close other apps and try Done again.\n\nClose this app without preparing the USB?'):
+                            self.root.destroy()
+                            return
+                    elif not self.cancel_event.is_set() and not self.ejecting:
                         self.show_progress(event['stage'], event['percent'])
                 else:
                     self.log.configure(state='normal')

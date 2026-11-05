@@ -4,6 +4,7 @@ on:
   push:
     paths:
       - app.py
+      - windows_usb.py
       - build-windows.ps1
       - tests/**
       - .github/workflows/windows-portable.yml
