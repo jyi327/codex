@@ -145,6 +145,91 @@ class WorkflowTests(unittest.TestCase):
         self.assertFalse(any(isinstance(event, dict) and event.get('percent') == 100 for event in events))
         self.assertIsNone(events[-1])
 
+    def test_cancel_flushes_before_removing_only_its_temporary_file(self):
+        with tempfile.TemporaryDirectory() as work:
+            root = Path(work)
+            source = root / 'song.mp3'
+            source.write_bytes(b'x' * (3 * 1024 * 1024))
+            destination = root / 'usb'
+            destination.mkdir()
+            unrelated = destination / '.someone-elses.partial'
+            unrelated.write_bytes(b'keep')
+            cancel = threading.Event()
+            events = []
+            real_fsync = app.os.fsync
+            real_unlink = Path.unlink
+
+            def flush(descriptor):
+                events.append('flush')
+                return real_fsync(descriptor)
+
+            def unlink(path, *args, **kwargs):
+                if path.name.startswith('.youtubetousb-'):
+                    events.append('remove')
+                return real_unlink(path, *args, **kwargs)
+
+            def progress(stage, percent=None):
+                if stage == 'Copying to USB' and percent:
+                    self.assertFalse((destination / source.name).exists())
+                    cancel.set()
+
+            with patch.object(app.os, 'fsync', side_effect=flush), patch.object(Path, 'unlink', unlink):
+                with self.assertRaises(app.Cancelled):
+                    app.copy_verified(source, destination, progress, cancel)
+            self.assertLess(events.index('flush'), events.index('remove'))
+            self.assertEqual(list(destination.iterdir()), [unrelated])
+            self.assertEqual(unrelated.read_bytes(), b'keep')
+
+    def test_publish_does_not_overwrite_a_file_created_during_copy(self):
+        with tempfile.TemporaryDirectory() as work:
+            root = Path(work)
+            source = root / 'song.mp3'
+            source.write_bytes(b'new audio')
+            destination = root / 'usb'
+
+            def progress(stage, percent=None):
+                if stage == 'Verifying USB copy':
+                    (destination / source.name).write_bytes(b'other app created this')
+
+            with self.assertRaises(OSError):
+                app.copy_verified(source, destination, progress)
+            self.assertEqual((destination / source.name).read_bytes(), b'other app created this')
+            self.assertEqual(list(destination.iterdir()), [destination / source.name])
+
+    def test_failed_verification_does_not_publish_an_mp3(self):
+        with tempfile.TemporaryDirectory() as work:
+            root = Path(work)
+            source = root / 'song.mp3'
+            source.write_bytes(b'new audio')
+            destination = root / 'usb'
+            with patch.object(app, 'digest', side_effect=[b'original', b'corrupt']):
+                with self.assertRaisesRegex(OSError, 'verification failed'):
+                    app.copy_verified(source, destination)
+            self.assertEqual(list(destination.iterdir()), [])
+
+    def test_cleanup_failure_is_not_reported_as_normal_cancellation(self):
+        with tempfile.TemporaryDirectory() as work:
+            root = Path(work)
+            source = root / 'song.mp3'
+            source.write_bytes(b'x' * (2 * 1024 * 1024))
+            destination = root / 'usb'
+            cancel = threading.Event()
+            real_unlink = Path.unlink
+
+            def unlink(path, *args, **kwargs):
+                if path.name.startswith('.youtubetousb-'):
+                    raise PermissionError('USB is unavailable')
+                return real_unlink(path, *args, **kwargs)
+
+            def progress(stage, percent=None):
+                if stage == 'Copying to USB' and percent:
+                    cancel.set()
+
+            with patch.object(Path, 'unlink', unlink):
+                with self.assertRaises(app.TransferCleanupError):
+                    app.copy_verified(source, destination, progress, cancel)
+            self.assertFalse((destination / source.name).exists())
+
     @unittest.skipUnless(app.sys.platform == 'win32' or os.environ.get('DISPLAY'), 'GUI requires Windows or a display')
     def test_gui_cancel_and_restart_controls(self):
         root = app.tk.Tk()
@@ -163,6 +248,13 @@ class WorkflowTests(unittest.TestCase):
             self.assertFalse(instance.busy)
             self.assertEqual(str(instance.button['state']), 'normal')
             self.assertIn('Stopped', instance.progress_label['text'])
+            instance.busy = True
+            instance.transfer_cleanup_failed = True
+            instance.close_when_done = True
+            instance.events.put(None)
+            instance.poll()
+            self.assertFalse(instance.close_when_done)
+            self.assertIn('cleanup could not finish', instance.progress_label['text'])
         finally:
             root.destroy()
 

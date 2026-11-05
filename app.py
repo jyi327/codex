@@ -10,6 +10,7 @@ import shutil
 import subprocess
 import sys
 import threading
+import tempfile
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 from urllib.parse import urlparse
@@ -60,6 +61,39 @@ def digest(path, cancel=None):
     return result.digest()
 
 
+class TransferCleanupError(OSError):
+    """A USB error prevented confirming that transfer cleanup finished."""
+
+
+def sync_directory(folder):
+    # Windows file writes use fsync; publication additionally requests write-through.
+    # Opening a volume for flushing on Windows would require administrator access.
+    if sys.platform != 'win32':
+        descriptor = os.open(folder, os.O_RDONLY)
+        try:
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+
+
+def publish_verified(temporary, target):
+    """Publish a verified file without replacing any existing destination."""
+    if sys.platform == 'win32':
+        from ctypes import wintypes
+        kernel32 = ctypes.WinDLL('kernel32', use_last_error=True)
+        move = kernel32.MoveFileExW
+        move.argtypes = [wintypes.LPCWSTR, wintypes.LPCWSTR, wintypes.DWORD]
+        move.restype = wintypes.BOOL
+        # Same-directory move; deliberately omit MOVEFILE_REPLACE_EXISTING.
+        if not move(str(temporary), str(target), 0x8):  # MOVEFILE_WRITE_THROUGH
+            raise ctypes.WinError(ctypes.get_last_error())
+    else:
+        # link is atomic and fails if target already exists, unlike POSIX rename.
+        os.link(temporary, target)
+        temporary.unlink()
+    sync_directory(target.parent)
+
+
 def copy_verified(source, folder, progress=None, cancel=None):
     def report(stage, percent=None):
         if progress:
@@ -76,33 +110,43 @@ def copy_verified(source, folder, progress=None, cancel=None):
         raise FileExistsError('Different file already exists: ' + str(target))
     if shutil.disk_usage(folder).free < source.stat().st_size + 1024 * 1024:
         raise OSError('Not enough free space on the selected drive.')
-    # Exclusive creation prevents a race from overwriting another file.
-    created = False
-    report('Copying to USB', 0)
+    # Only an operation-owned temporary file is ever written or removed.
+    descriptor, temporary_name = tempfile.mkstemp(prefix='.youtubetousb-', suffix='.partial', dir=folder)
+    temporary = Path(temporary_name)
     try:
-        with target.open('xb') as output:
-            created = True
-            with source.open('rb') as incoming:
-                total = source.stat().st_size
-                copied = 0
-                previous = -1
-                for chunk in iter(lambda: incoming.read(1024 * 1024), b''):
-                    check_cancel(cancel)
-                    output.write(chunk)
-                    copied += len(chunk)
-                    percent = min(99, int(copied * 100 / total)) if total else 99
-                    if percent != previous:
-                        report('Copying to USB', percent)
-                        previous = percent
-            output.flush()
-            os.fsync(output.fileno())
+        with os.fdopen(descriptor, 'wb') as output:
+            try:
+                report('Copying to USB', 0)
+                with source.open('rb') as incoming:
+                    total = source.stat().st_size
+                    copied = 0
+                    previous = -1
+                    for chunk in iter(lambda: incoming.read(1024 * 1024), b''):
+                        check_cancel(cancel)
+                        output.write(chunk)
+                        copied += len(chunk)
+                        percent = min(99, int(copied * 100 / total)) if total else 99
+                        if percent != previous:
+                            report('Copying to USB', percent)
+                            previous = percent
+            finally:
+                # Finish the current OS write and flush before closing, even on Cancel.
+                output.flush()
+                os.fsync(output.fileno())
         report('Verifying USB copy')
-        if digest(source, cancel) != digest(target, cancel):
+        if digest(source, cancel) != digest(temporary, cancel):
             raise OSError('Copy verification failed: ' + source.name)
-    except Exception:
-        if created:
-            target.unlink(missing_ok=True)
-        raise
+        check_cancel(cancel)
+        publish_verified(temporary, target)
+    finally:
+        # Never delete the final MP3 or touch someone else's temporary file.
+        try:
+            temporary.unlink(missing_ok=True)
+            if not folder.is_dir():
+                raise OSError('USB destination is no longer available')
+            sync_directory(folder)
+        except OSError as error:
+            raise TransferCleanupError('USB cleanup could not finish. Keep the drive connected. Temporary file: ' + str(temporary)) from error
     report('Copy verified', 100)
     return 'Copied and verified: ' + source.name
 
@@ -183,6 +227,7 @@ class App:
         self.cancel_event = threading.Event()
         self.busy = False
         self.close_when_done = False
+        self.transfer_cleanup_failed = False
         root.title('Songs to your USB drive')
         root.geometry('860x740')
         root.minsize(680, 620)
@@ -247,7 +292,7 @@ class App:
         self.progress_label.pack(anchor='w', pady=(10, 4))
         self.progress_bar = ttk.Progressbar(frame, maximum=100, mode='determinate')
         self.progress_bar.pack(fill='x', pady=(4, 8))
-        ttk.Label(frame, text='Keep the USB plugged in until copying or cancelling has finished.').pack(anchor='w')
+        ttk.Label(frame, text='Wait for Done or Stopped. Then use Windows Eject before unplugging.').pack(anchor='w')
         ttk.Label(frame, text='Only download songs you own or have permission to download.').pack(anchor='w', pady=(4, 6))
         self.details_visible = tk.BooleanVar(value=False)
         ttk.Checkbutton(frame, text='Show details', variable=self.details_visible, command=self.toggle_details).pack(anchor='w')
@@ -337,9 +382,10 @@ class App:
             return
         self.busy = True
         self.cancel_event.clear()
+        self.transfer_cleanup_failed = False
         self.set_controls(True)
         self.show_progress('Preparing download')
-        threading.Thread(target=self.run, args=(urls, destination), daemon=True).start()
+        threading.Thread(target=self.run, args=(urls, destination), daemon=False).start()
 
     def run(self, urls, destination):
         import tempfile
@@ -383,6 +429,8 @@ class App:
                             raise RuntimeError('No MP3 files were produced.')
                 except Cancelled:
                     raise
+                except TransferCleanupError:
+                    raise
                 except Exception as error:
                     failures += 1
                     self.events.put('ERROR: ' + str(error))
@@ -390,6 +438,10 @@ class App:
             self.report_progress('Some songs could not be copied. Open Show details below.' if failures else 'Done! Your songs are on the USB drive.', None if failures else 100)
         except Cancelled:
             self.events.put('Cancelled. Completed songs are kept. Any incomplete USB copy was removed; local downloads are kept for retry.')
+        except TransferCleanupError as error:
+            self.transfer_cleanup_failed = True
+            self.events.put('ERROR: ' + str(error))
+            self.report_progress('USB cleanup needs attention. Open Show details below.')
         except Exception as error:
             self.events.put('ERROR: ' + str(error))
             self.report_progress('Something went wrong. Open Show details below.')
@@ -417,8 +469,11 @@ class App:
                     self.busy = False
                     self.progress_bar.stop()
                     self.set_controls(False)
-                    if self.cancel_event.is_set():
-                        self.show_progress('Stopped. Songs already copied are still on your USB.')
+                    if self.transfer_cleanup_failed:
+                        self.close_when_done = False
+                        self.show_progress('USB cleanup could not finish. Keep it connected and open Show details.')
+                    elif self.cancel_event.is_set():
+                        self.show_progress('Stopped. Use Windows Eject before unplugging your USB.')
                     if self.close_when_done:
                         self.root.destroy()
                         return
