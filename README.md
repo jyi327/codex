@@ -8,11 +8,11 @@ Download `YouTubeToUSB-Windows-x64.zip` from a successful GitHub Actions **Build
 
 This is a portable folder, not a single-file executable. It requires 64-bit Windows 10/11 and Internet access for YouTube. It stores downloaded audio in your local app-data folder. Windows may show a warning for the unsigned executable. Do not bypass organizational security policies. To update the downloader, download a newly built portable package.
 
-The Windows workflow builds the portable ZIP and checks that the packaged application can start before uploading it.
+The Windows workflow builds the portable ZIP and checks that the packaged application can start and that its bundled downloader/FFmpeg can convert a local test tone to a valid MP3 and complete a verified copy before uploading it.
 
 ## Build the portable app
 
-The app shows live download percentages for the current track and byte-based USB-copy percentages. Each track and stage starts a new percentage; this is not a percentage for the entire playlist. Conversion, verification, and downloads with unknown sizes show an animated progress bar. Copying reaches 100% only after verification succeeds.
+The app shows live download percentages for the current track and byte-based USB-copy percentages. Each track and stage starts a new percentage; this is not a percentage for the entire playlist. Conversion shows a percentage when the audio duration is known, using FFmpeg’s actual converted-audio time. Verification and stages with unknown sizes show an animated progress bar. Copying reaches 100% only after verification succeeds.
 
 Push these files to GitHub and run the **Build portable Windows app** workflow, then download its ZIP artifact. Alternatively, on a Windows build machine with Python 3.12, FFmpeg/ffprobe, and Node.js on PATH, run `./build-windows.ps1` in PowerShell. Setup tools are needed only on the build machine. The script checks the upstream yt-dlp executable against its published SHA-256 checksum before bundling it. The build selects the latest yt-dlp release so rebuilding can incorporate extraction fixes; it is not a reproducible pinned build.
 

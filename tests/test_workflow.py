@@ -6,6 +6,7 @@ import queue
 import threading
 import time
 import os
+import importlib.util
 from pathlib import Path
 import app
 
@@ -43,7 +44,7 @@ class WorkflowTests(unittest.TestCase):
             instance.events = queue.Queue()
             instance.cancel_event = threading.Event()
 
-            def download(command, progress, cancel, detail):
+            def download(command, progress, cancel, detail, ffmpeg_progress):
                 cache = Path(command[command.index('--paths') + 1])
                 source = cache / 'song.mp3'
                 source.write_bytes(b'downloaded audio')
@@ -100,6 +101,22 @@ class WorkflowTests(unittest.TestCase):
             app.download_with_progress([app.sys.executable, '-c', 'import time; time.sleep(.35)'], lambda stage, percent=None: stages.append((stage, percent)), detail=logs.append)
         self.assertIn(('Still waiting… You can cancel.', None), stages)
         self.assertTrue(any('No new downloader output' in line for line in logs))
+
+    def test_real_ffmpeg_progress_and_postprocessor_completion(self):
+        updates, logs = [], []
+        with tempfile.TemporaryDirectory() as work:
+            progress_file = Path(work) / 'conversion progress.txt'
+            code = f"import time; from pathlib import Path; print('USB_CONVERT:ExtractAudio|started|10', flush=True); time.sleep(.2); Path({str(progress_file)!r}).write_text('out_time_us=5000000\\nprogress=continue\\n'); time.sleep(.25); print('USB_CONVERT:ExtractAudio|finished|10', flush=True); print('USB_CONVERT:MoveFiles|finished|10', flush=True)"
+            result = app.download_with_progress([app.sys.executable, '-c', code], lambda stage, percent=None: updates.append((stage, percent)), detail=logs.append, ffmpeg_progress=progress_file)
+        self.assertEqual(result.returncode, 0)
+        self.assertIn(('Making the MP3 file', 50), updates)
+        self.assertIn(('MP3 ready. Finishing…', None), updates)
+        self.assertEqual(updates[-1], ('Finishing download…', None))
+        self.assertTrue(any('ExtractAudio finished' in line for line in logs))
+
+    @unittest.skipUnless(importlib.util.find_spec('yt_dlp'), 'Source yt-dlp unavailable; Windows build separately tests bundled conversion')
+    def test_offline_downloader_conversion_and_copy(self):
+        app.conversion_smoke_test()
 
     def test_cancel_stops_conversion_child_process(self):
         with tempfile.TemporaryDirectory() as work:
@@ -158,7 +175,7 @@ class WorkflowTests(unittest.TestCase):
         instance.events = queue.Queue()
         instance.cancel_event = threading.Event()
 
-        def download(command, progress, cancel, detail):
+        def download(command, progress, cancel, detail, ffmpeg_progress):
             cancel.set()
             raise app.Cancelled()
 

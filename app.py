@@ -7,6 +7,7 @@ from pathlib import Path
 import queue
 import signal
 import shutil
+import shlex
 import subprocess
 import sys
 import threading
@@ -189,7 +190,7 @@ def preparation_status(line):
     return None
 
 
-def download_with_progress(command, progress, cancel=None, detail=None):
+def download_with_progress(command, progress, cancel=None, detail=None, ffmpeg_progress=None):
     """Stream progress without buffering the entire downloader output."""
     recent = deque(maxlen=40)
     check_cancel(cancel)
@@ -197,15 +198,18 @@ def download_with_progress(command, progress, cancel=None, detail=None):
     stop_errors = []
     last_output = [time.monotonic()]
     launched_at = last_output[0]
+    conversion = {'active': False, 'duration': None, 'baseline': None}
     progress('Starting downloader…')
     if detail:
         detail('Starting downloader; waiting for its first response…')
-    with subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+    with subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                           text=True, encoding='utf-8', errors='replace',
                           start_new_session=sys.platform != 'win32',
                           creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0)) as process:
         def watch_cancel():
             notified_at = None
+            last_ffmpeg_signature = None
+            last_conversion_log = 0
             # A separate watcher can stop FFmpeg even while it produces no output.
             while not done.wait(0.1):
                 if cancel is not None and cancel.is_set():
@@ -216,9 +220,25 @@ def download_with_progress(command, progress, cancel=None, detail=None):
                             stop_errors.append(str(error))
                             progress('Unable to stop yet. Please wait for the current song to finish.')
                     return
+                if ffmpeg_progress is not None and conversion['active']:
+                    try:
+                        stat = ffmpeg_progress.stat()
+                        signature = (stat.st_mtime_ns, stat.st_size)
+                        if signature != last_ffmpeg_signature and signature != conversion['baseline']:
+                            last_ffmpeg_signature = signature
+                            fields = dict(line.split('=', 1) for line in ffmpeg_progress.read_text(encoding='utf-8').splitlines() if '=' in line)
+                            seconds = max(0, int(fields['out_time_us']) / 1_000_000)
+                            last_output[0] = time.monotonic()
+                            duration = conversion['duration']
+                            progress('Making the MP3 file', min(99, seconds * 100 / duration) if duration else None)
+                            if detail and time.monotonic() - last_conversion_log >= 5:
+                                last_conversion_log = time.monotonic()
+                                detail(f'FFmpeg has converted {seconds:.1f} seconds of audio.')
+                    except (OSError, ValueError, KeyError):
+                        pass  # FFmpeg may be between writes to its progress file.
                 if time.monotonic() - last_output[0] >= QUIET_NOTICE_SECONDS and notified_at != last_output[0]:
                     notified_at = last_output[0]
-                    progress('Still waiting… You can cancel.')
+                    progress('Waiting for audio conversion… You can cancel.' if conversion['active'] else 'Still waiting… You can cancel.')
                     if detail:
                         detail(f'No new downloader output for {QUIET_NOTICE_SECONDS} seconds. Still waiting; Cancel remains available.')
 
@@ -246,7 +266,27 @@ def download_with_progress(command, progress, cancel=None, detail=None):
                         progress('Downloading this song', max(0, min(100, downloaded * 100 / total)))
                     except (ValueError, StopIteration, IndexError):
                         progress('Downloading this song')
-                elif line.startswith('USB_CONVERT:') or line.startswith('[ExtractAudio]'):
+                elif line.startswith('USB_CONVERT:'):
+                    fields = line.strip().split(':', 1)[1].split('|')
+                    processor, status, duration = (fields + ['NA', 'NA'])[:3] if len(fields) > 1 else ('ExtractAudio', fields[0], 'NA')
+                    if detail:
+                        detail(f'Post-processing: {processor} {status}.')
+                    if processor == 'ExtractAudio':
+                        conversion['active'] = status != 'finished'
+                        try:
+                            conversion['duration'] = float(duration) if float(duration) > 0 else None
+                        except ValueError:
+                            conversion['duration'] = None
+                        if status == 'started' and ffmpeg_progress is not None:
+                            try:
+                                stat = ffmpeg_progress.stat()
+                                conversion['baseline'] = (stat.st_mtime_ns, stat.st_size)
+                            except OSError:
+                                conversion['baseline'] = None
+                        progress('MP3 ready. Finishing…' if status == 'finished' else 'Making the MP3 file')
+                    elif not conversion['active']:
+                        progress('Finishing download…')
+                elif line.startswith('[ExtractAudio]'):
                     progress('Making the MP3 file')
                 else:
                     stage = preparation_status(line)
@@ -260,6 +300,49 @@ def download_with_progress(command, progress, cancel=None, detail=None):
             raise RuntimeError('Could not stop immediately; the current download has now ended.')
         check_cancel(cancel)
         return result
+
+
+def make_download_command(url, cache, manifest, ffmpeg_progress):
+    location = bundled_tools() if getattr(sys, 'frozen', False) else Path(shutil.which('ffmpeg') or 'ffmpeg').resolve().parent
+    return downloader_command() + [
+        '--ignore-config', '--js-runtimes', 'node', '--ffmpeg-location', str(location),
+        '--no-quiet', '--progress', '--newline', '--no-colors', '--progress-delta', '0.3',
+        '--progress-template', 'download:USB_PROGRESS:%(progress.downloaded_bytes)s|%(progress.total_bytes)s|%(progress.total_bytes_estimate)s',
+        '--progress-template', 'postprocess:USB_CONVERT:%(progress.postprocessor)s|%(progress.status)s|%(info.duration)s',
+        '--postprocessor-args', 'ExtractAudio+ffmpeg_o:-nostdin -stats_period 0.5 -progress ' + shlex.quote(str(ffmpeg_progress)),
+        '--windows-filenames', '--no-overwrites', '--extract-audio', '--audio-format', 'mp3', '--audio-quality', '192K',
+        '--paths', str(cache), '-o', '%(title).140B [%(id)s].%(ext)s',
+        '--print-to-file', 'after_move:filepath', str(manifest), '--', url,
+    ]
+
+
+def conversion_smoke_test():
+    """Exercise the actual downloader, FFmpeg, ffprobe and copy path offline."""
+    with tempfile.TemporaryDirectory(prefix='YouTubeToUSB conversion ') as work:
+        root = Path(work)
+        source = root / 'test tone.wav'
+        subprocess.run(['ffmpeg', '-v', 'error', '-nostdin', '-f', 'lavfi', '-i',
+                        'sine=frequency=440:duration=1', str(source)], check=True,
+                       stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                       creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0), timeout=30)
+        manifest = root / 'files.txt'
+        ffmpeg_progress = root / 'conversion progress.txt'
+        command = make_download_command(source.as_uri(), root / 'downloads', manifest, ffmpeg_progress)
+        command[-2:-2] = ['--enable-file-urls']  # Offline self-test only; GUI still accepts only YouTube.
+        result = download_with_progress(command, lambda *args: None, ffmpeg_progress=ffmpeg_progress)
+        if result.returncode:
+            raise RuntimeError(result.stderr)
+        files = manifest.read_text(encoding='utf-8').splitlines()
+        if len(files) != 1 or not Path(files[0]).is_file():
+            raise RuntimeError('Offline conversion did not create one MP3.')
+        codec = subprocess.check_output(['ffprobe', '-v', 'error', '-select_streams', 'a:0', '-show_entries',
+                                         'stream=codec_name', '-of', 'default=nw=1:nk=1', files[0]],
+                                        text=True, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0), timeout=30)
+        if codec.strip() != 'mp3':
+            raise RuntimeError('Converted output is not MP3 audio.')
+        copy_verified(Path(files[0]), root / 'simulated USB')
+        if 'progress=end' not in ffmpeg_progress.read_text(encoding='utf-8'):
+            raise RuntimeError('FFmpeg did not report completed conversion progress.')
 
 
 def removable_drives():
@@ -594,16 +677,9 @@ class App:
                     self.events.put('Downloading: ' + url)
                     with tempfile.TemporaryDirectory() as work:
                         manifest = Path(work) / 'files.txt'
-                        command = downloader_command() + ['--ignore-config',
-                                   '--js-runtimes', 'node',
-                                   '--no-quiet', '--progress', '--newline', '--no-colors', '--progress-delta', '0.3',
-                                   '--progress-template', 'download:USB_PROGRESS:%(progress.downloaded_bytes)s|%(progress.total_bytes)s|%(progress.total_bytes_estimate)s',
-                                   '--progress-template', 'postprocess:USB_CONVERT:%(progress.status)s',
-                                   '--windows-filenames', '--no-overwrites',
-                                   '--extract-audio', '--audio-format', 'mp3', '--audio-quality', '192K',
-                                   '--paths', str(cache), '-o', '%(title).140B [%(id)s].%(ext)s',
-                                   '--print-to-file', 'after_move:filepath', str(manifest), '--', url]
-                        result = download_with_progress(command, self.report_progress, self.cancel_event, self.log_detail)
+                        ffmpeg_progress = Path(work) / 'ffmpeg-progress.txt'
+                        command = make_download_command(url, cache, manifest, ffmpeg_progress)
+                        result = download_with_progress(command, self.report_progress, self.cancel_event, self.log_detail, ffmpeg_progress)
                         check_cancel(self.cancel_event)
                         # Even a partially failed playlist may contain completed tracks.
                         files = manifest.read_text(encoding='utf-8').splitlines() if manifest.exists() else []
@@ -711,6 +787,14 @@ class App:
 if __name__ == '__main__':
     if getattr(sys, 'frozen', False):
         os.environ['PATH'] = str(bundled_tools()) + os.pathsep + os.environ.get('PATH', '')
+    if '--conversion-test' in sys.argv:
+        try:
+            conversion_smoke_test()
+        except Exception:
+            import traceback
+            Path(sys.argv[sys.argv.index('--conversion-test') + 1]).write_text(traceback.format_exc(), encoding='utf-8')
+            sys.exit(1)
+        sys.exit(0)
     root = ctk.CTk()
     App(root)
     if '--smoke-test' in sys.argv:

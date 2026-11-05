@@ -34,6 +34,17 @@ if (-not $smoke.WaitForExit(30000)) {
     throw 'Packaged app did not finish its startup check within 30 seconds'
 }
 if ($smoke.ExitCode -ne 0) { throw "Packaged app startup failed: $($smoke.ExitCode)" }
+$conversionReport = Join-Path $PSScriptRoot 'build\conversion-smoke-error.txt'
+Remove-Item $conversionReport -ErrorAction SilentlyContinue
+$conversion = Start-Process -FilePath "$PSScriptRoot\dist\YouTubeToUSB\YouTubeToUSB.exe" -ArgumentList @('--conversion-test', "`"$conversionReport`"") -PassThru
+if (-not $conversion.WaitForExit(90000)) {
+    taskkill /PID $conversion.Id /T /F | Out-Null
+    throw 'Bundled audio conversion did not finish within 90 seconds'
+}
+if ($conversion.ExitCode -ne 0) {
+    if (Test-Path $conversionReport) { Get-Content $conversionReport | Write-Host }
+    throw "Bundled audio conversion failed: $($conversion.ExitCode)"
+}
 Copy-Item README.md dist\YouTubeToUSB\README.md -Force
 Compress-Archive -Path dist\YouTubeToUSB -DestinationPath dist\YouTubeToUSB-Windows-x64.zip -Force
 Write-Host 'Built dist\YouTubeToUSB-Windows-x64.zip. Extract the entire ZIP before starting the app.'
