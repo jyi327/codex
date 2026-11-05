@@ -5,6 +5,7 @@ on:
     paths:
       - app.py
       - build-windows.ps1
+      - tests/**
       - .github/workflows/windows-portable.yml
 permissions:
   contents: read
@@ -29,7 +30,14 @@ jobs:
           if (-not $binary) { throw 'Actual FFmpeg binary not found' }
           $binary.DirectoryName | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
       - name: Test conversion and copying
-        run: python -m unittest discover -s tests -t . -v
+        shell: pwsh
+        working-directory: ${{ github.workspace }}
+        run: |
+          if (-not (Test-Path 'tests/test_workflow.py')) {
+            throw 'Missing tests/test_workflow.py. Upload the complete tests folder to the repository root on this branch.'
+          }
+          python -m unittest discover -s tests -t . -v
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Package standalone application
         shell: pwsh
         run: ./build-windows.ps1
