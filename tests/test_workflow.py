@@ -3,6 +3,9 @@ import subprocess
 import unittest
 from unittest.mock import patch, MagicMock
 import queue
+import threading
+import time
+import os
 from pathlib import Path
 import app
 
@@ -38,8 +41,9 @@ class WorkflowTests(unittest.TestCase):
             usb.mkdir()
             instance = app.App.__new__(app.App)
             instance.events = queue.Queue()
+            instance.cancel_event = threading.Event()
 
-            def download(command, progress):
+            def download(command, progress, cancel):
                 cache = Path(command[command.index('--paths') + 1])
                 source = cache / 'song.mp3'
                 source.write_bytes(b'downloaded audio')
@@ -58,7 +62,109 @@ class WorkflowTests(unittest.TestCase):
         result = app.download_with_progress([app.sys.executable, '-c', code], lambda stage, percent=None: updates.append((stage, percent)))
         self.assertEqual(result.returncode, 2)
         self.assertIn('test error', result.stderr)
-        self.assertEqual(updates, [('Downloading current track', 25), ('Downloading current track', 75), ('Downloading current track', None), ('Converting to MP3', None)])
+        self.assertEqual(updates, [('Downloading this song', 25), ('Downloading this song', 75), ('Downloading this song', None), ('Making the MP3 file', None)])
+
+    def test_cancel_stops_a_silent_download(self):
+        cancel = threading.Event()
+        timer = threading.Timer(0.3, cancel.set)
+        started = time.monotonic()
+        timer.start()
+        try:
+            with self.assertRaises(app.Cancelled):
+                app.download_with_progress([app.sys.executable, '-c', 'import time; time.sleep(10)'], lambda *args: None, cancel)
+        finally:
+            timer.cancel()
+        self.assertLess(time.monotonic() - started, 6)
+
+    def test_cancel_stops_conversion_child_process(self):
+        with tempfile.TemporaryDirectory() as work:
+            ready = Path(work) / 'ready'
+            survived = Path(work) / 'survived'
+            child_code = f"from pathlib import Path; import time; Path({str(ready)!r}).touch(); time.sleep(1); Path({str(survived)!r}).touch()"
+            parent_code = f"import subprocess, sys, time; subprocess.Popen([sys.executable, '-c', {child_code!r}]); time.sleep(8)"
+            cancel = threading.Event()
+            done = threading.Event()
+
+            def cancel_when_started():
+                for _ in range(200):
+                    if ready.exists():
+                        cancel.set()
+                        return
+                    if done.wait(0.02):
+                        return
+                cancel.set()
+
+            watcher = threading.Thread(target=cancel_when_started)
+            watcher.start()
+            try:
+                with self.assertRaises(app.Cancelled):
+                    app.download_with_progress([app.sys.executable, '-c', parent_code], lambda *args: None, cancel)
+            finally:
+                done.set()
+                watcher.join()
+            self.assertTrue(ready.exists())
+            threading.Event().wait(1.1)
+            self.assertFalse(survived.exists(), 'The conversion child must also stop')
+
+    def test_cancel_removes_incomplete_copy_and_keeps_other_files(self):
+        for cancel_stage in ('Copying to USB', 'Verifying USB copy'):
+            with self.subTest(stage=cancel_stage), tempfile.TemporaryDirectory() as work:
+                root = Path(work)
+                source = root / 'song.mp3'
+                source.write_bytes(b'x' * (3 * 1024 * 1024))
+                destination = root / 'usb'
+                destination.mkdir()
+                existing = destination / 'completed.mp3'
+                existing.write_bytes(b'keep me')
+                cancel = threading.Event()
+
+                def progress(stage, percent=None):
+                    if stage == cancel_stage and (percent is None or percent > 0):
+                        cancel.set()
+
+                with self.assertRaises(app.Cancelled):
+                    app.copy_verified(source, destination, progress, cancel)
+                self.assertFalse((destination / source.name).exists())
+                self.assertEqual(existing.read_bytes(), b'keep me')
+                self.assertTrue(source.exists())
+
+    def test_cancel_does_not_start_next_link(self):
+        instance = app.App.__new__(app.App)
+        instance.events = queue.Queue()
+        instance.cancel_event = threading.Event()
+
+        def download(command, progress, cancel):
+            cancel.set()
+            raise app.Cancelled()
+
+        with tempfile.TemporaryDirectory() as work, patch.dict(app.os.environ, {'LOCALAPPDATA': work}), patch.object(app, 'download_with_progress', side_effect=download) as downloader:
+            instance.run(['https://youtu.be/one', 'https://youtu.be/two'], Path(work))
+        self.assertEqual(downloader.call_count, 1)
+        events = list(instance.events.queue)
+        self.assertTrue(any(isinstance(event, str) and event.startswith('Cancelled.') for event in events))
+        self.assertFalse(any(isinstance(event, dict) and event.get('percent') == 100 for event in events))
+        self.assertIsNone(events[-1])
+
+    @unittest.skipUnless(app.sys.platform == 'win32' or os.environ.get('DISPLAY'), 'GUI requires Windows or a display')
+    def test_gui_cancel_and_restart_controls(self):
+        root = app.tk.Tk()
+        root.withdraw()
+        try:
+            with patch.object(app, 'removable_drives', return_value=['E:\\']):
+                instance = app.App(root)
+            self.assertEqual(instance.drive.get(), 'E:\\')
+            instance.busy = True
+            instance.set_controls(True)
+            instance.cancel()
+            self.assertTrue(instance.cancel_event.is_set())
+            self.assertEqual(str(instance.cancel_button['state']), 'disabled')
+            instance.events.put(None)
+            instance.poll()
+            self.assertFalse(instance.busy)
+            self.assertEqual(str(instance.button['state']), 'normal')
+            self.assertIn('Stopped', instance.progress_label['text'])
+        finally:
+            root.destroy()
 
     def test_copy_percentage_finishes_after_verification(self):
         updates = []
