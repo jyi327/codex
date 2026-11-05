@@ -11,6 +11,8 @@ import subprocess
 import sys
 import threading
 import tempfile
+import time
+from datetime import datetime
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 from urllib.parse import urlparse
@@ -167,17 +169,43 @@ def stop_process_tree(process):
             pass
 
 
-def download_with_progress(command, progress, cancel=None):
+QUIET_NOTICE_SECONDS = 20
+
+
+def preparation_status(line):
+    text = line.lower()
+    if 'retrying' in text:
+        return 'Connection slow. Retrying…'
+    if '[jsc' in text or 'challenge' in text:
+        return 'Checking YouTube playback…'
+    if 'downloading webpage' in text or 'extracting url' in text:
+        return 'Reading YouTube link…'
+    if 'downloading' in text and ('player' in text or 'api json' in text):
+        return 'Checking available audio…'
+    if 'playlist' in text:
+        return 'Reading playlist…'
+    if '[info]' in text and 'format' in text:
+        return 'Starting audio download…'
+    return None
+
+
+def download_with_progress(command, progress, cancel=None, detail=None):
     """Stream progress without buffering the entire downloader output."""
     recent = deque(maxlen=40)
     check_cancel(cancel)
     done = threading.Event()
     stop_errors = []
+    last_output = [time.monotonic()]
+    launched_at = last_output[0]
+    progress('Starting downloader…')
+    if detail:
+        detail('Starting downloader; waiting for its first response…')
     with subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                           text=True, encoding='utf-8', errors='replace',
                           start_new_session=sys.platform != 'win32',
                           creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0)) as process:
         def watch_cancel():
+            notified_at = None
             # A separate watcher can stop FFmpeg even while it produces no output.
             while not done.wait(0.1):
                 if cancel is not None and cancel.is_set():
@@ -188,11 +216,28 @@ def download_with_progress(command, progress, cancel=None):
                             stop_errors.append(str(error))
                             progress('Unable to stop yet. Please wait for the current song to finish.')
                     return
+                if time.monotonic() - last_output[0] >= QUIET_NOTICE_SECONDS and notified_at != last_output[0]:
+                    notified_at = last_output[0]
+                    progress('Still waiting… You can cancel.')
+                    if detail:
+                        detail(f'No new downloader output for {QUIET_NOTICE_SECONDS} seconds. Still waiting; Cancel remains available.')
 
         watcher = threading.Thread(target=watch_cancel, daemon=True)
         watcher.start()
+        first_output = True
         try:
             for line in process.stdout:
+                last_output[0] = time.monotonic()
+                if first_output:
+                    first_output = False
+                    if detail:
+                        detail(f'Downloader responded after {time.monotonic() - launched_at:.1f} seconds.')
+                if not line.startswith(('USB_PROGRESS:', 'USB_CONVERT:')):
+                    text = line.rstrip()
+                    if text:
+                        recent.append(text)
+                        if detail:
+                            detail(text)
                 if line.startswith('USB_PROGRESS:'):
                     parts = line.strip().split(':', 1)[1].split('|')
                     try:
@@ -204,7 +249,9 @@ def download_with_progress(command, progress, cancel=None):
                 elif line.startswith('USB_CONVERT:') or line.startswith('[ExtractAudio]'):
                     progress('Making the MP3 file')
                 else:
-                    recent.append(line.rstrip())
+                    stage = preparation_status(line)
+                    if stage:
+                        progress(stage)
             result = subprocess.CompletedProcess(command, process.wait(), '', '\n'.join(recent))
         finally:
             done.set()
@@ -528,12 +575,16 @@ class App:
             self.last_destination = destination
             self.usb_device = None
             self.usb_identity_error = None
+            self.report_progress('Checking USB…')
+            self.log_detail('Checking USB identity for safe removal…')
+            usb_check_started = time.monotonic()
             try:
                 # Remember the actual device before copying, not just its drive letter.
                 self.usb_device = windows_usb.describe_usb(destination)
             except Exception as error:
                 self.usb_identity_error = error
                 self.events.put('Automatic safe removal unavailable: ' + str(error))
+            self.log_detail(f'USB check finished in {time.monotonic() - usb_check_started:.1f} seconds.')
             check_cancel(self.cancel_event)
             cache.mkdir(parents=True, exist_ok=True)
             for link_index, url in enumerate(urls, 1):
@@ -545,14 +596,14 @@ class App:
                         manifest = Path(work) / 'files.txt'
                         command = downloader_command() + ['--ignore-config',
                                    '--js-runtimes', 'node',
-                                   '--progress', '--newline', '--no-colors', '--progress-delta', '0.3',
+                                   '--no-quiet', '--progress', '--newline', '--no-colors', '--progress-delta', '0.3',
                                    '--progress-template', 'download:USB_PROGRESS:%(progress.downloaded_bytes)s|%(progress.total_bytes)s|%(progress.total_bytes_estimate)s',
                                    '--progress-template', 'postprocess:USB_CONVERT:%(progress.status)s',
                                    '--windows-filenames', '--no-overwrites',
                                    '--extract-audio', '--audio-format', 'mp3', '--audio-quality', '192K',
                                    '--paths', str(cache), '-o', '%(title).140B [%(id)s].%(ext)s',
                                    '--print-to-file', 'after_move:filepath', str(manifest), '--', url]
-                        result = download_with_progress(command, self.report_progress, self.cancel_event)
+                        result = download_with_progress(command, self.report_progress, self.cancel_event, self.log_detail)
                         check_cancel(self.cancel_event)
                         # Even a partially failed playlist may contain completed tracks.
                         files = manifest.read_text(encoding='utf-8').splitlines() if manifest.exists() else []
@@ -593,6 +644,9 @@ class App:
 
     def report_progress(self, stage, percent=None):
         self.events.put({'stage': stage, 'percent': percent})
+
+    def log_detail(self, message):
+        self.events.put(datetime.now().strftime('[%H:%M:%S] ') + message)
 
     def show_progress(self, stage, percent=None):
         self.progress_bar.stop()

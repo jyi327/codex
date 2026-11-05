@@ -43,7 +43,7 @@ class WorkflowTests(unittest.TestCase):
             instance.events = queue.Queue()
             instance.cancel_event = threading.Event()
 
-            def download(command, progress, cancel):
+            def download(command, progress, cancel, detail):
                 cache = Path(command[command.index('--paths') + 1])
                 source = cache / 'song.mp3'
                 source.write_bytes(b'downloaded audio')
@@ -62,7 +62,7 @@ class WorkflowTests(unittest.TestCase):
         result = app.download_with_progress([app.sys.executable, '-c', code], lambda stage, percent=None: updates.append((stage, percent)))
         self.assertEqual(result.returncode, 2)
         self.assertIn('test error', result.stderr)
-        self.assertEqual(updates, [('Downloading this song', 25), ('Downloading this song', 75), ('Downloading this song', None), ('Making the MP3 file', None)])
+        self.assertEqual(updates, [('Starting downloader…', None), ('Downloading this song', 25), ('Downloading this song', 75), ('Downloading this song', None), ('Making the MP3 file', None)])
 
     def test_cancel_stops_a_silent_download(self):
         cancel = threading.Event()
@@ -75,6 +75,31 @@ class WorkflowTests(unittest.TestCase):
         finally:
             timer.cancel()
         self.assertLess(time.monotonic() - started, 6)
+
+    def test_preparation_output_is_reported_live(self):
+        logs, stages = [], []
+        with tempfile.TemporaryDirectory() as work:
+            finished = Path(work) / 'finished'
+            code = f"import time; from pathlib import Path; print('[youtube] abc: Downloading webpage', flush=True); time.sleep(.2); Path({str(finished)!r}).touch(); print('WARNING: Retrying (1/3)', flush=True)"
+
+            def detail(line):
+                logs.append(line)
+                if 'Downloading webpage' in line:
+                    self.assertFalse(finished.exists(), 'Details must be delivered before the child finishes')
+
+            result = app.download_with_progress([app.sys.executable, '-c', code], lambda stage, percent=None: stages.append(stage), detail=detail)
+        self.assertEqual(result.returncode, 0)
+        self.assertIn('[youtube] abc: Downloading webpage', logs)
+        self.assertIn('WARNING: Retrying (1/3)', logs)
+        self.assertIn('Reading YouTube link…', stages)
+        self.assertIn('Connection slow. Retrying…', stages)
+
+    def test_silent_downloader_reports_wait_without_fake_percentage(self):
+        stages, logs = [], []
+        with patch.object(app, 'QUIET_NOTICE_SECONDS', .1):
+            app.download_with_progress([app.sys.executable, '-c', 'import time; time.sleep(.35)'], lambda stage, percent=None: stages.append((stage, percent)), detail=logs.append)
+        self.assertIn(('Still waiting… You can cancel.', None), stages)
+        self.assertTrue(any('No new downloader output' in line for line in logs))
 
     def test_cancel_stops_conversion_child_process(self):
         with tempfile.TemporaryDirectory() as work:
@@ -133,7 +158,7 @@ class WorkflowTests(unittest.TestCase):
         instance.events = queue.Queue()
         instance.cancel_event = threading.Event()
 
-        def download(command, progress, cancel):
+        def download(command, progress, cancel, detail):
             cancel.set()
             raise app.Cancelled()
 
