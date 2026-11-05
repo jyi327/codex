@@ -4,7 +4,7 @@ Windows desktop app for converting permitted YouTube audio to 192 kbps MP3 and c
 
 ## Quick video guide
 
-[Watch or download the 40-second walkthrough](docs/YouTubeToUSB-QuickGuide.mp4). Captioned demonstration of USB selection, pasting links, START, NEXT SONG, and DONE. Downloads and progress are simulated and shortened; the clip does not perform real USB removal.
+[观看／下载 37 秒普通话操作示范](docs/YouTubeToUSB-Mandarin-Guide.mp4)：从桌面双击程序，到浏览器搜索歌曲、复制网址、粘贴到程序，再点击 START。包含普通话合成配音和中文字幕；桌面及 YouTube 页面为模拟操作，不实际下载歌曲。
 
 ## Portable Windows app (no installation)
 
