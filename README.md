@@ -2,6 +2,10 @@
 
 Windows desktop app for converting permitted YouTube audio to 192 kbps MP3 and copying it directly into the flash drive's root folder. Supports individual links and explicit playlist URLs. A watch link containing a playlist ID downloads only the selected song; use a `/playlist?list=...` URL to download the whole playlist. Local downloads are retained; existing identical files are skipped, different files with the same name produce an error. Transfers are checked with SHA-256. The app never formats drives or deletes source audio.
 
+## Quick video guide
+
+[Watch or download the 40-second walkthrough](docs/YouTubeToUSB-QuickGuide.mp4). Captioned demonstration of USB selection, pasting links, START, NEXT SONG, and DONE. Downloads and progress are simulated and shortened; the clip does not perform real USB removal.
+
 ## Portable Windows app (no installation)
 
 Download `YouTubeToUSB-Windows-x64.zip` from a successful GitHub Actions **Build portable Windows app** run. Extract the entire ZIP, open its `YouTubeToUSB` folder, and double-click `YouTubeToUSB.exe`. Python, FFmpeg, Node.js, and yt-dlp are bundled: no administrator access, installer, or separate runtime installation is required. Keep the `_internal` folder beside the EXE. Paste links and click **Start**. When exactly one removable drive is detected, it is selected automatically. With multiple drives, choose the destination first. MP3s go directly into the drive root; no Music subfolder is created.
