@@ -436,8 +436,8 @@ class WorkflowTests(unittest.TestCase):
 
     def test_portable_downloader_uses_bundled_executable(self):
         with tempfile.TemporaryDirectory() as work:
-            tools = Path(work) / 'tools'
-            tools.mkdir()
+            tools = Path(work) / 'tools' / 'downloader'
+            tools.mkdir(parents=True)
             with patch.object(app.sys, 'frozen', True, create=True), patch.object(app.sys, '_MEIPASS', work, create=True):
                 with self.assertRaises(FileNotFoundError):
                     app.downloader_command()
@@ -449,6 +449,44 @@ class WorkflowTests(unittest.TestCase):
         for value in ('', 'file:///tmp/audio', 'https://youtube.com.evil.org/x', '--exec=cmd'):
             with self.assertRaises(ValueError):
                 app.validate_urls(value)
+
+    def test_music_links_are_normalized_without_mix_or_tracking(self):
+        expected = 'https://www.youtube.com/watch?v=Tm3gvy-qpks'
+        self.assertEqual(app.canonical_download_url('https://music.youtube.com/watch?v=Tm3gvy-qpks&list=RDtest&si=tracking'), expected)
+        self.assertEqual(app.canonical_download_url('https://youtu.be/Tm3gvy-qpks?si=tracking'), expected)
+        playlist = 'https://www.youtube.com/playlist?list=example'
+        self.assertEqual(app.canonical_download_url(playlist), playlist)
+
+    def test_download_can_start_before_usb_query_finishes(self):
+        instance = app.App.__new__(app.App)
+        instance.events = queue.Queue()
+        instance.cancel_event = threading.Event()
+        querying, release = threading.Event(), threading.Event()
+
+        def identify(destination):
+            querying.set()
+            self.assertTrue(release.wait(3))
+            return object()
+
+        def download(command, *args):
+            self.assertTrue(querying.wait(1))
+            self.assertFalse(release.is_set())
+            cache = Path(command[command.index('--paths') + 1])
+            source = cache / 'song.mp3'
+            source.write_bytes(b'audio')
+            Path(command[command.index('--print-to-file') + 2]).write_text(str(source), encoding='utf-8')
+            release.set()
+            return subprocess.CompletedProcess(command, 0, '', '')
+
+        with tempfile.TemporaryDirectory() as work, patch.dict(app.os.environ, {'LOCALAPPDATA': work}), patch.object(app.windows_usb, 'describe_usb', side_effect=identify), patch.object(app, 'download_with_progress', side_effect=download):
+            destination = Path(work) / 'usb'
+            destination.mkdir()
+            try:
+                instance.run(['https://youtu.be/example'], destination)
+            finally:
+                release.set()
+            self.assertEqual((destination / 'song.mp3').read_bytes(), b'audio')
+            self.assertTrue(instance.download_complete)
 
     def test_real_conversion_and_verified_copy(self):
         with tempfile.TemporaryDirectory() as work:

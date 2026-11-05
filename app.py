@@ -17,7 +17,7 @@ import time
 from datetime import datetime
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
-from urllib.parse import urlparse
+from urllib.parse import urlparse, parse_qs, urlencode
 import windows_usb
 import customtkinter as ctk
 
@@ -28,7 +28,7 @@ def bundled_tools():
 
 def downloader_command():
     if getattr(sys, 'frozen', False):
-        executable = bundled_tools() / 'yt-dlp.exe'
+        executable = bundled_tools() / 'downloader' / 'yt-dlp.exe'
         if not executable.is_file():
             raise FileNotFoundError('Bundled downloader is missing. Extract the complete ZIP again.')
         return [str(executable)]
@@ -287,7 +287,10 @@ def download_with_progress(command, progress, cancel=None, detail=None, ffmpeg_p
                     with display_lock:
                         display['rank'] = 0
                         display['last'] = None
-                        display['label'] = f'Song {fields[1]} of {fields[2]} · ' if len(fields) >= 3 and fields[1].isdigit() and fields[2].isdigit() and int(fields[2]) > 1 else ''
+                        if len(fields) >= 3 and fields[1].isdigit():
+                            display['label'] = f'Song {fields[1]} of {fields[2]} · ' if fields[2].isdigit() and int(fields[2]) > 1 else f'Song {fields[1]} · '
+                        else:
+                            display['label'] = ''
                         conversion['active'] = False
                     if detail:
                         detail('Processing song: ' + ' | '.join(fields))
@@ -340,11 +343,22 @@ def download_with_progress(command, progress, cancel=None, detail=None, ffmpeg_p
         return result
 
 
+def canonical_download_url(url):
+    parsed = urlparse(url)
+    video_id = parse_qs(parsed.query).get('v', [''])[0] if parsed.path == '/watch' else ''
+    if parsed.hostname == 'youtu.be':
+        video_id = parsed.path.strip('/')
+    if parsed.hostname in ('youtube.com', 'www.youtube.com', 'm.youtube.com', 'music.youtube.com', 'youtu.be') and re.fullmatch(r'[A-Za-z0-9_-]{11}', video_id):
+        return 'https://www.youtube.com/watch?' + urlencode({'v': video_id})
+    return url
+
+
 def make_download_command(url, cache, manifest, ffmpeg_progress):
     location = bundled_tools() if getattr(sys, 'frozen', False) else Path(shutil.which('ffmpeg') or 'ffmpeg').resolve().parent
     return downloader_command() + [
         '--ignore-config', '--js-runtimes', 'node', '--ffmpeg-location', str(location),
         '--yes-playlist' if urlparse(url).path.rstrip('/') == '/playlist' else '--no-playlist',
+        '--lazy-playlist', '--format', 'bestaudio/best', '--concurrent-fragments', '4',
         '--no-simulate', '--print', 'before_dl:USB_TRACK:%(id)s|%(playlist_index)s|%(playlist_count)s',
         '--retries', '3', '--fragment-retries', '3', '--extractor-retries', '2', '--socket-timeout', '20',
         '--no-quiet', '--progress', '--newline', '--no-colors', '--progress-delta', '0.3',
@@ -353,7 +367,7 @@ def make_download_command(url, cache, manifest, ffmpeg_progress):
         '--postprocessor-args', 'ExtractAudio+ffmpeg_o:-nostdin -stats_period 0.5 -progress ' + shlex.quote(str(ffmpeg_progress)),
         '--windows-filenames', '--no-overwrites', '--extract-audio', '--audio-format', 'mp3', '--audio-quality', '192K',
         '--paths', str(cache), '-o', '%(title).140B [%(id)s].%(ext)s',
-        '--print-to-file', 'after_move:filepath', str(manifest), '--', url,
+        '--print-to-file', 'after_move:filepath', str(manifest), '--', canonical_download_url(url),
     ]
 
 
@@ -720,20 +734,24 @@ class App:
         import tempfile
         failures = 0
         cache = Path(os.environ.get('LOCALAPPDATA', str(Path.home()))) / 'YouTubeToUSB' / 'Downloads'
+        identity_thread = None
         try:
             self.last_destination = destination
             self.usb_device = None
             self.usb_identity_error = None
-            self.report_progress('Checking USB…')
-            self.log_detail('Checking USB identity for safe removal…')
-            usb_check_started = time.monotonic()
-            try:
-                # Remember the actual device before copying, not just its drive letter.
-                self.usb_device = windows_usb.describe_usb(destination)
-            except Exception as error:
-                self.usb_identity_error = error
-                self.events.put('Automatic safe removal unavailable: ' + str(error))
-            self.log_detail(f'USB check finished in {time.monotonic() - usb_check_started:.1f} seconds.')
+            self.log_detail('Identifying USB in parallel with downloader startup…')
+
+            def identify_usb():
+                started = time.monotonic()
+                try:
+                    self.usb_device = windows_usb.describe_usb(destination)
+                except Exception as error:
+                    self.usb_identity_error = error
+                    self.events.put('Automatic safe removal unavailable: ' + str(error))
+                self.log_detail(f'USB check finished in {time.monotonic() - started:.1f} seconds.')
+
+            identity_thread = threading.Thread(target=identify_usb, daemon=False)
+            identity_thread.start()
             check_cancel(self.cancel_event)
             cache.mkdir(parents=True, exist_ok=True)
             for link_index, url in enumerate(urls, 1):
@@ -753,6 +771,7 @@ class App:
                         check_cancel(self.cancel_event)
                         # Even a partially failed playlist may contain completed tracks.
                         files = manifest.read_text(encoding='utf-8').splitlines() if manifest.exists() else []
+                        identity_thread.join()
                         for filename in dict.fromkeys(files):
                             check_cancel(self.cancel_event)
                             source = Path(filename).resolve()
@@ -787,6 +806,8 @@ class App:
             self.events.put('ERROR: ' + str(error))
             self.report_progress('Something went wrong. Open Show details below.')
         finally:
+            if identity_thread is not None:
+                identity_thread.join()
             self.events.put(None)
 
     def report_progress(self, stage, percent=None):

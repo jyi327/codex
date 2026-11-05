@@ -19,14 +19,36 @@ foreach ($tool in @('ffmpeg.exe', 'ffprobe.exe', 'node.exe')) {
 # Download the upstream standalone downloader and verify its published checksum.
 $release = 'https://github.com/yt-dlp/yt-dlp/releases/latest/download'
 Invoke-WebRequest "$release/yt-dlp.exe" -OutFile "$tools\yt-dlp.exe"
+Invoke-WebRequest "$release/yt-dlp_win.zip" -OutFile "$tools\yt-dlp_win.zip"
 Invoke-WebRequest "$release/SHA2-256SUMS" -OutFile "$tools\SHA2-256SUMS"
-$line = Get-Content "$tools\SHA2-256SUMS" | Where-Object { $_ -match '^([a-fA-F0-9]{64})\s+\*?yt-dlp\.exe$' }
-if (@($line).Count -ne 1) { throw 'Expected exactly one yt-dlp.exe checksum' }
-$expected = ($line -split '\s+')[0]
-if ((Get-FileHash "$tools\yt-dlp.exe" -Algorithm SHA256).Hash -ne $expected) { throw 'yt-dlp checksum mismatch' }
-& "$tools\yt-dlp.exe" --version
-Check-Exit
-& $python -m PyInstaller --noconfirm --clean --windowed --onedir --name YouTubeToUSB --collect-all customtkinter --add-binary "$tools\ffmpeg.exe;tools" --add-binary "$tools\ffprobe.exe;tools" --add-binary "$tools\node.exe;tools" --add-binary "$tools\yt-dlp.exe;tools" app.py
+foreach ($asset in @('yt-dlp.exe', 'yt-dlp_win.zip')) {
+    $pattern = '^([a-fA-F0-9]{64})\s+\*?' + [regex]::Escape($asset) + '$'
+    $line = @(Get-Content "$tools\SHA2-256SUMS" | Where-Object { $_ -match $pattern })
+    if ($line.Count -ne 1) { throw "Expected exactly one checksum for $asset" }
+    $expected = ($line[0] -split '\s+')[0]
+    if ((Get-FileHash (Join-Path $tools $asset) -Algorithm SHA256).Hash -ne $expected) { throw "Checksum mismatch: $asset" }
+}
+$downloader = Join-Path $tools 'downloader'
+if (Test-Path $downloader) { Remove-Item $downloader -Recurse -Force }
+Expand-Archive "$tools\yt-dlp_win.zip" -DestinationPath $downloader
+if (-not (Test-Path "$downloader\yt-dlp.exe")) { throw 'Unpackaged downloader executable not found' }
+function Measure-DownloaderStartup($executable) {
+    $times = @()
+    foreach ($sample in 1..3) {
+        $timer = [System.Diagnostics.Stopwatch]::StartNew()
+        & $executable --version | Out-Null
+        Check-Exit
+        $timer.Stop()
+        $times += $timer.ElapsedMilliseconds
+    }
+    return ($times | Sort-Object)[1]
+}
+$oldStartup = Measure-DownloaderStartup "$tools\yt-dlp.exe"
+$newStartup = Measure-DownloaderStartup "$downloader\yt-dlp.exe"
+$startupReport = "Downloader startup median (3 runs): self-extracting $oldStartup ms; unpackaged $newStartup ms. Measured on the build runner, not a YouTube download."
+Write-Host $startupReport
+if ($env:GITHUB_STEP_SUMMARY) { $startupReport | Out-File $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8 }
+& $python -m PyInstaller --noconfirm --clean --windowed --onedir --name YouTubeToUSB --collect-all customtkinter --add-binary "$tools\ffmpeg.exe;tools" --add-binary "$tools\ffprobe.exe;tools" --add-binary "$tools\node.exe;tools" --add-data "$downloader;tools/downloader" app.py
 Check-Exit
 $smoke = Start-Process -FilePath "$PSScriptRoot\dist\YouTubeToUSB\YouTubeToUSB.exe" -ArgumentList '--smoke-test' -PassThru
 if (-not $smoke.WaitForExit(30000)) {
@@ -46,5 +68,6 @@ if ($conversion.ExitCode -ne 0) {
     throw "Bundled audio conversion failed: $($conversion.ExitCode)"
 }
 Copy-Item README.md dist\YouTubeToUSB\README.md -Force
+$startupReport | Out-File dist\YouTubeToUSB\StartupTiming.txt -Encoding utf8
 Compress-Archive -Path dist\YouTubeToUSB -DestinationPath dist\YouTubeToUSB-Windows-x64.zip -Force
 Write-Host 'Built dist\YouTubeToUSB-Windows-x64.zip. Extract the entire ZIP before starting the app.'

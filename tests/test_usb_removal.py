@@ -9,7 +9,28 @@ import windows_usb
 
 class SafeRemovalTests(unittest.TestCase):
     def setUp(self):
+        windows_usb._device_cache.clear()
         self.device = windows_usb.USBDevice('E:\\', 'original-volume', 'USBSTOR\\original')
+
+    def test_usb_identity_cache_avoids_repeating_powershell(self):
+        result = subprocess.CompletedProcess([], 0, '{"bus":"USB","device_id":"USBSTOR\\\\original"}', '')
+        with patch.object(windows_usb, 'volume_identity', side_effect=[('E:\\', 'one'), ('E:\\', 'one'), ('E:\\', 'two')]), patch.object(windows_usb.subprocess, 'run', return_value=result) as query:
+            first = windows_usb.describe_usb('E:\\')
+            self.assertIs(windows_usb.describe_usb('E:\\'), first)
+            self.assertEqual(query.call_count, 1)
+            self.assertEqual(windows_usb.describe_usb('E:\\').volume_id, 'two')
+            self.assertEqual(query.call_count, 2)
+
+    def test_removal_always_refreshes_cached_device_identity(self):
+        result = subprocess.CompletedProcess([], 0, '{"bus":"USB","device_id":"USBSTOR\\\\original"}', '')
+        with patch.object(windows_usb, 'volume_identity', return_value=('E:\\', 'original-volume')), patch.object(windows_usb.subprocess, 'run', return_value=result) as query, patch.object(windows_usb, 'request_device_eject') as request:
+            device = windows_usb.describe_usb('E:\\')
+            windows_usb.describe_usb('E:\\')
+            self.assertEqual(query.call_count, 1)
+            windows_usb.eject_usb(device)
+            self.assertEqual(query.call_count, 2)
+            request.assert_called_once_with(device.device_id)
+        self.assertEqual(windows_usb._device_cache, {})
 
     def test_only_original_device_can_be_removed(self):
         with patch.object(windows_usb, 'describe_usb', return_value=self.device), patch.object(windows_usb, 'request_device_eject') as request:

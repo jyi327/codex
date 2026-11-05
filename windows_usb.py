@@ -20,6 +20,9 @@ class USBDevice:
     device_id: str
 
 
+_device_cache = {}
+
+
 def volume_identity(destination):
     if sys.platform != 'win32':
         raise NotUSBDrive('Automatic USB removal is available on Windows only.')
@@ -41,8 +44,11 @@ def volume_identity(destination):
     return root.value.upper(), name.value
 
 
-def describe_usb(destination):
+def describe_usb(destination, *, use_cache=True):
     root, volume_id = volume_identity(destination)
+    key = (root, volume_id)
+    if use_cache and key in _device_cache:
+        return _device_cache[key]
     # Only the validated drive letter is inserted into this fixed local query.
     script = r"""
 $ErrorActionPreference = 'Stop'
@@ -63,7 +69,12 @@ $device = Get-CimInstance Win32_DiskDrive -Filter ('Index=' + $disk.Number)
         raise NotUSBDrive('This folder is not on a USB drive. No device was ejected.')
     if not data.get('device_id'):
         raise OSError('Windows did not provide a USB device identity. Use Windows Eject instead.')
-    return USBDevice(root, volume_id, data['device_id'])
+    device = USBDevice(root, volume_id, data['device_id'])
+    for old_key in list(_device_cache):
+        if old_key[0] == root:
+            _device_cache.pop(old_key, None)
+    _device_cache[key] = device
+    return device
 
 
 def request_device_eject(device_id):
@@ -87,7 +98,9 @@ def request_device_eject(device_id):
 
 
 def eject_usb(expected):
-    current = describe_usb(expected.root)
+    # Always query the physical device again before removal, even if startup used a cache.
+    current = describe_usb(expected.root, use_cache=False)
     if current != expected:
         raise OSError('The drive has changed since copying. No device was ejected. Use Windows Eject for the original drive.')
     request_device_eject(expected.device_id)
+    _device_cache.pop((expected.root, expected.volume_id), None)
