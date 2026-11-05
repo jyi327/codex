@@ -321,7 +321,8 @@ class WorkflowTests(unittest.TestCase):
             instance.events.put(None)
             instance.poll()
             self.assertFalse(instance.busy)
-            self.assertEqual(str(instance.button.cget('state')), 'normal')
+            self.assertEqual(str(instance.button.cget('state')), 'disabled')
+            self.assertEqual(instance.search_button.cget('state'), 'normal')
             self.assertIn('Stopped', instance.progress_label.cget('text'))
             instance.busy = True
             instance.transfer_cleanup_failed = True
@@ -334,18 +335,19 @@ class WorkflowTests(unittest.TestCase):
             root.destroy()
 
     @unittest.skipUnless(app.sys.platform == 'win32' or os.environ.get('DISPLAY'), 'GUI requires Windows or a display')
-    def test_paste_adds_newline_and_done_is_hidden_until_complete(self):
+    def test_song_selection_enables_start_and_done_stays_hidden_until_complete(self):
         root = app.tk.Tk()
         root.withdraw()
         try:
             with patch.object(app, 'removable_drives', return_value=['E:\\']):
                 instance = app.App(root)
+            self.assertFalse(hasattr(instance, 'urls'))
             self.assertEqual(instance.complete_frame.winfo_manager(), '')
-            with patch.object(root, 'clipboard_get', return_value='https://youtu.be/one'):
-                self.assertEqual(instance.paste_links(), 'break')
-            with patch.object(root, 'clipboard_get', return_value='https://youtu.be/two'):
-                instance.paste_links()
-            self.assertEqual(instance.urls.get('1.0', 'end-1c'), 'https://youtu.be/one\nhttps://youtu.be/two\n')
+            self.assertEqual(instance.button.cget('state'), 'disabled')
+            instance.finish_search({'search_results': [{'title': 'A song', 'channel': 'Artist', 'duration': 180, 'url': 'https://www.youtube.com/watch?v=abcdefghijk'}]})
+            instance.select_song(0)
+            self.assertEqual(instance.selected_url, 'https://www.youtube.com/watch?v=abcdefghijk')
+            self.assertEqual(instance.button.cget('state'), 'normal')
             instance.show_done(True)
             self.assertEqual(instance.complete_frame.winfo_manager(), 'pack')
             self.assertEqual(instance.action_frame.winfo_manager(), '')
@@ -355,13 +357,41 @@ class WorkflowTests(unittest.TestCase):
             root.destroy()
 
     @unittest.skipUnless(app.sys.platform == 'win32' or os.environ.get('DISPLAY'), 'GUI requires Windows or a display')
-    def test_next_song_clears_links_and_keeps_usb_connected(self):
+    def test_new_search_clears_previous_selection_and_cancel_keeps_usb(self):
         root = app.tk.Tk()
         root.withdraw()
         try:
             with patch.object(app, 'removable_drives', return_value=['E:\\']):
                 instance = app.App(root)
-                instance.urls.insert('1.0', 'https://youtu.be/finished')
+            instance.selected_url = 'https://www.youtube.com/watch?v=abcdefghijk'
+            instance.search_entry.insert(0, 'New song')
+            with patch.object(app.threading, 'Thread') as worker:
+                instance.search_songs()
+            worker.return_value.start.assert_called_once()
+            self.assertTrue(instance.searching)
+            self.assertIsNone(instance.selected_url)
+            self.assertEqual(instance.button.cget('state'), 'disabled')
+            self.assertEqual(instance.search_button.cget('state'), 'disabled')
+            instance.cancel()
+            self.assertFalse(instance.remove_when_stopped)
+            instance.finish_search({'search_cancelled': True})
+            self.assertFalse(instance.busy)
+            self.assertFalse(instance.searching)
+            self.assertEqual(instance.drive.get(), 'E:\\')
+            self.assertEqual(instance.search_button.cget('state'), 'normal')
+        finally:
+            root.destroy()
+
+    @unittest.skipUnless(app.sys.platform == 'win32' or os.environ.get('DISPLAY'), 'GUI requires Windows or a display')
+    def test_next_song_clears_search_and_keeps_usb_connected(self):
+        root = app.tk.Tk()
+        root.withdraw()
+        try:
+            with patch.object(app, 'removable_drives', return_value=['E:\\']):
+                instance = app.App(root)
+                instance.search_entry.insert(0, 'Previous song')
+                instance.results = [{'title': 'Previous song', 'url': 'https://www.youtube.com/watch?v=abcdefghijk'}]
+                instance.selected_url = instance.results[0]['url']
                 instance.download_complete = True
                 instance.last_destination = 'E:\\'
                 instance.usb_device = object()
@@ -370,7 +400,9 @@ class WorkflowTests(unittest.TestCase):
                 with patch.object(app.windows_usb, 'eject_usb') as eject:
                     instance.next_song()
                 eject.assert_not_called()
-            self.assertEqual(instance.urls.get('1.0', 'end-1c'), '')
+            self.assertEqual(instance.search_entry.get(), '')
+            self.assertEqual(instance.results, [])
+            self.assertIsNone(instance.selected_url)
             self.assertEqual(instance.drive.get(), 'E:\\')
             self.assertIs(instance.usb_device, original_device)
             self.assertEqual(instance.last_destination, 'E:\\')
@@ -379,7 +411,7 @@ class WorkflowTests(unittest.TestCase):
             self.assertEqual(instance.complete_frame.winfo_manager(), '')
             self.assertEqual(instance.progress_label.cget('text'), 'Ready')
             self.assertEqual(instance.percent_label.cget('text'), '0%')
-            self.assertEqual(instance.button.cget('state'), 'normal')
+            self.assertEqual(instance.button.cget('state'), 'disabled')
         finally:
             root.destroy()
 
@@ -414,6 +446,9 @@ class WorkflowTests(unittest.TestCase):
             self.assertEqual(instance.progress_label.cget('text'), 'No USB connected')
             with patch.object(app, 'removable_drives', return_value=['E:\\']):
                 instance.refresh_drives()
+            self.assertEqual(instance.button.cget('state'), 'disabled')
+            instance.finish_search({'search_results': [{'title': 'A song', 'channel': 'Artist', 'duration': 180, 'url': 'https://www.youtube.com/watch?v=abcdefghijk'}]})
+            instance.select_song(0)
             self.assertEqual(instance.button.cget('state'), 'normal')
             self.assertEqual(instance.drive.get(), 'E:\\')
             with patch.object(app, 'removable_drives', return_value=[]), patch.object(Path, 'is_dir', return_value=False):

@@ -67,6 +67,24 @@ if ($conversion.ExitCode -ne 0) {
     if (Test-Path $conversionReport) { Get-Content $conversionReport | Write-Host }
     throw "Bundled audio conversion failed: $($conversion.ExitCode)"
 }
+$searchReport = Join-Path $PSScriptRoot 'dist\YouTubeToUSB\SearchCheck.txt'
+$searchCheck = Start-Process -FilePath "$PSScriptRoot\dist\YouTubeToUSB\YouTubeToUSB.exe" -ArgumentList @('--search-test', "`"$searchReport`"") -PassThru
+if (-not $searchCheck.WaitForExit(60000)) {
+    taskkill /PID $searchCheck.Id /T /F | Out-Null
+    'Live search check timed out on the build network.' | Out-File $searchReport -Encoding utf8
+}
+if (Test-Path $searchReport) {
+    $searchText = (Get-Content $searchReport -Raw) -replace '[\r\n]+', ' '
+    Write-Host $searchText
+    if ($searchText.StartsWith('Live search succeeded:')) {
+        Write-Host '::notice title=Live YouTube search::Packaged app returned search results successfully.'
+    } else {
+        Write-Host '::warning title=Live YouTube search::Live search could not be verified on this network. See SearchCheck.txt.'
+    }
+    if ($env:GITHUB_STEP_SUMMARY) { Get-Content $searchReport | Out-File $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8 }
+} else {
+    throw 'Packaged search check did not produce a report'
+}
 Copy-Item README.md dist\YouTubeToUSB\README.md -Force
 $startupReport | Out-File dist\YouTubeToUSB\StartupTiming.txt -Encoding utf8
 Compress-Archive -Path dist\YouTubeToUSB -DestinationPath dist\YouTubeToUSB-Windows-x64.zip -Force

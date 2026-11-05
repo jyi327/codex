@@ -19,6 +19,7 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 from urllib.parse import urlparse, parse_qs, urlencode
 import windows_usb
+import youtube_search
 import customtkinter as ctk
 
 
@@ -496,22 +497,37 @@ class App:
         self.remove_when_stopped = False
         self.exit_after_removal = True
         self.download_complete = False
+        self.searching = False
+        self.results = []
+        self.selected_url = None
+        self.result_widgets = []
+        self.result_choice = tk.IntVar(value=-1)
+        self.interface_font = 'Segoe UI' if sys.platform == 'win32' else 'Helvetica'
         interface_font = 'Segoe UI' if sys.platform == 'win32' else 'Helvetica'
         ctk.set_appearance_mode('light')
         root.title('YouTube to MP3')
-        root.geometry('800x660')
+        root.geometry(f'840x{max(580, min(800, root.winfo_screenheight() - 100))}')
         root.minsize(660, 580)
         root.configure(bg='#eff5ff')
         self.page = ctk.CTkScrollableFrame(root, fg_color='#eff5ff', corner_radius=0, scrollbar_button_color='#d9e4f4', scrollbar_button_hover_color='#b8cceb')
         self.page.pack(fill='both', expand=True)
         frame = ctk.CTkFrame(self.page, fg_color='transparent')
         frame.pack(fill='x', expand=True, padx=26, pady=24)
-        ctk.CTkLabel(frame, text='YouTube links', font=(interface_font, 23, 'bold'), text_color='#17253b', anchor='w').pack(fill='x', pady=(0, 14))
-        self.urls = ctk.CTkTextbox(frame, height=180, corner_radius=18, border_width=1, border_color='#ccdcf3',
-                                  fg_color='white', text_color='#17253b', font=(interface_font, 17),
-                                  wrap='word', spacing1=4, spacing3=4, undo=True)
-        self.urls.pack(fill='x')
-        self.urls.bind('<<Paste>>', self.paste_links)
+        ctk.CTkLabel(frame, text='Find a song', font=(interface_font, 23, 'bold'), text_color='#17253b', anchor='w').pack(fill='x', pady=(0, 14))
+        search_row = ctk.CTkFrame(frame, fg_color='transparent')
+        search_row.pack(fill='x')
+        self.search_entry = ctk.CTkEntry(search_row, placeholder_text='Song name or artist', height=54, corner_radius=16,
+                                         border_width=1, border_color='#ccdcf3', fg_color='white', text_color='#17253b', font=(interface_font, 18))
+        self.search_entry.pack(side='left', fill='x', expand=True, padx=(0, 12))
+        self.search_entry.bind('<Return>', lambda event: self.search_songs())
+        self.search_button = ctk.CTkButton(search_row, text='SEARCH', width=140, height=54, corner_radius=16,
+                                          font=(interface_font, 17, 'bold'), fg_color='#2563eb', hover_color='#1d4ed8', command=self.search_songs)
+        self.search_button.pack(side='right')
+        self.result_frame = ctk.CTkScrollableFrame(frame, height=230, corner_radius=18, fg_color='white', border_width=1, border_color='#d4e2f6')
+        self.result_frame.pack(fill='x', pady=(16, 0))
+        self.result_frame.grid_columnconfigure(0, weight=1)
+        self.result_message = ctk.CTkLabel(self.result_frame, text='Search for a song to begin.', font=(interface_font, 16), text_color='#64748b', height=180)
+        self.result_message.grid(row=0, column=0, sticky='ew')
         self.drive = USBSelector(frame, self.drive_changed, interface_font)
         self.drive.pack(fill='x', pady=(22, 0))
         progress_row = ctk.CTkFrame(frame, fg_color='transparent')
@@ -546,7 +562,7 @@ class App:
         self.refresh_drives()
         root.after(100, self.poll)
         root.after(1500, self.monitor_drives)
-        self.urls.focus_set()
+        self.search_entry.focus_set()
 
     def toggle_details(self):
         visible = not self.details_visible.get()
@@ -566,36 +582,109 @@ class App:
 
     def update_start_state(self):
         if hasattr(self, 'button'):
-            enabled = bool(self.drive.get()) and not self.busy and not self.ejecting
+            enabled = bool(self.drive.get()) and bool(self.selected_url) and not self.busy and not self.ejecting
             self.button.configure(state='normal' if enabled else 'disabled', fg_color='#2563eb' if enabled else '#dce5f2')
             if not self.busy and not self.ejecting and not self.download_complete:
                 if not self.drive.get():
                     self.show_progress('No USB connected')
                 elif self.progress_label.cget('text') == 'No USB connected':
-                    self.show_progress('Ready', 0)
+                    self.show_progress('Ready' if self.selected_url else 'Choose a song.' if self.results else 'Search for a song.', 0)
 
     def monitor_drives(self):
         if not self.busy and not self.ejecting:
             self.refresh_drives()
         self.root.after(1500, self.monitor_drives)
 
-    def paste_links(self, event=None):
+    def search_songs(self):
         if self.busy or self.ejecting:
-            return 'break'
+            return
         try:
-            text = self.root.clipboard_get().strip()
-            if text:
-                try:
-                    self.urls.delete('sel.first', 'sel.last')
-                except tk.TclError:
-                    pass
-                if self.urls.get('insert linestart', 'insert').strip():
-                    self.urls.insert('insert', '\n')
-                self.urls.insert('insert', '\n'.join(text.split()) + '\n')
-                self.urls.see('insert')
-        except tk.TclError:
-            self.show_progress('Copy a YouTube link first.')
-        return 'break'
+            query = youtube_search.validate_query(self.search_entry.get())
+            command = downloader_command()
+        except (ValueError, FileNotFoundError) as error:
+            self.show_progress(str(error))
+            return
+        self.busy = True
+        self.searching = True
+        self.download_complete = False
+        self.selected_url = None
+        self.results = []
+        self.result_choice.set(-1)
+        self.cancel_event.clear()
+        self.remove_when_stopped = False
+        self.close_when_done = False
+        self.show_done(False)
+        self.render_results('Searching YouTube…')
+        self.set_controls(True)
+        self.show_progress('Searching YouTube…')
+        self.log_detail('Searching YouTube for: ' + query)
+        threading.Thread(target=self.search_worker, args=(query, command), daemon=False).start()
+
+    def search_worker(self, query, command):
+        try:
+            results = youtube_search.search(query, command, self.cancel_event, stop_process_tree)
+        except youtube_search.SearchCancelled:
+            self.events.put({'search_cancelled': True})
+        except Exception as error:
+            self.events.put({'search_error': str(error)})
+        else:
+            self.events.put({'search_results': results})
+
+    def finish_search(self, event):
+        self.searching = False
+        self.busy = False
+        self.progress_bar.stop()
+        self.results = event.get('search_results', [])
+        self.selected_url = None
+        self.result_choice.set(-1)
+        if 'search_error' in event:
+            self.log_detail('Search error: ' + event['search_error'])
+            message = 'Search failed. Please try again.'
+        elif event.get('search_cancelled'):
+            message = 'Search cancelled.'
+        else:
+            message = 'Choose a song below.' if self.results else 'No songs found. Try another name.'
+        self.render_results(message)
+        self.set_controls(False)
+        self.show_progress(message)
+        if self.close_when_done:
+            self.prepare_exit()
+
+    def render_results(self, message=''):
+        for child in self.result_frame.winfo_children():
+            child.destroy()
+        self.result_widgets = []
+        if not self.results:
+            ctk.CTkLabel(self.result_frame, text=message, font=(self.interface_font, 16), text_color='#64748b', wraplength=580, height=180).grid(row=0, column=0, sticky='ew')
+            return
+        for index, result in enumerate(self.results):
+            row = ctk.CTkFrame(self.result_frame, corner_radius=12, border_width=1, border_color='#e5edf7', fg_color='white')
+            row.grid(row=index, column=0, sticky='ew', padx=4, pady=4)
+            row.grid_columnconfigure(1, weight=1)
+            select = ctk.CTkRadioButton(row, text='', width=28, variable=self.result_choice, value=index, fg_color='#2563eb', hover_color='#1d4ed8', command=lambda i=index: self.select_song(i))
+            select.grid(row=0, column=0, rowspan=2, padx=(14, 6), pady=12)
+            title = ctk.CTkLabel(row, text=result['title'], font=(self.interface_font, 16, 'bold'), text_color='#17253b', anchor='w', justify='left', wraplength=560)
+            title.grid(row=0, column=1, sticky='ew', padx=(4, 12), pady=(10, 0))
+            duration = result.get('duration')
+            duration_text = f'{int(duration)//60}:{int(duration)%60:02d}' if duration is not None else ''
+            subtitle = ctk.CTkLabel(row, text=' · '.join(item for item in (result.get('channel'), duration_text) if item), font=(self.interface_font, 13), text_color='#64748b', anchor='w')
+            subtitle.grid(row=1, column=1, sticky='ew', padx=(4, 12), pady=(0, 10))
+            for target in (row, title, subtitle):
+                target.bind('<Button-1>', lambda event, i=index: self.select_song(i))
+            self.result_widgets.append((row, select))
+
+    def select_song(self, index):
+        if self.busy or self.ejecting or not 0 <= index < len(self.results):
+            return
+        self.result_choice.set(index)
+        self.selected_url = self.results[index]['url']
+        for i, (row, button) in enumerate(self.result_widgets):
+            row.configure(fg_color='#edf4ff' if i == index else 'white', border_color='#2563eb' if i == index else '#e5edf7')
+        self.update_start_state()
+        if self.drive.get():
+            self.show_progress('Ready', 0)
+        else:
+            self.show_progress('No USB connected')
 
     def show_done(self, complete):
         if complete:
@@ -612,8 +701,12 @@ class App:
         self.cancel_event.clear()
         self.remove_when_stopped = False
         self.close_when_done = False
-        self.urls.configure(state='normal')
-        self.urls.delete('1.0', 'end')
+        self.search_entry.configure(state='normal')
+        self.search_entry.delete(0, 'end')
+        self.results = []
+        self.selected_url = None
+        self.result_choice.set(-1)
+        self.render_results('Search for another song.')
         self.show_done(False)
         self.refresh_drives()
         self.set_controls(False)
@@ -621,22 +714,25 @@ class App:
             self.show_progress('Ready', 0)
         else:
             self.show_progress('No USB connected')
-        self.urls.focus_set()
+        self.search_entry.focus_set()
 
     def set_controls(self, busy):
         self.button.configure(state='disabled' if busy else 'normal')
         self.cancel_button.configure(state='normal' if busy else 'disabled')
-        self.urls.configure(state='disabled' if busy else 'normal')
+        self.search_entry.configure(state='disabled' if busy else 'normal')
+        self.search_button.configure(state='disabled' if busy else 'normal')
+        for row, select in self.result_widgets:
+            select.configure(state='disabled' if busy else 'normal')
         self.drive.configure(state='disabled' if busy else 'normal')
         self.next_button.configure(state='disabled' if busy else 'normal')
         self.update_start_state()
 
     def cancel(self):
         if self.busy and not self.cancel_event.is_set():
-            self.remove_when_stopped = True
+            self.remove_when_stopped = not self.searching
             self.cancel_event.set()
             self.cancel_button.configure(state='disabled')
-            self.show_progress('Stopping… Please keep the USB plugged in.')
+            self.show_progress('Stopping search…' if self.searching else 'Stopping… Please keep the USB plugged in.')
 
     def close(self):
         if self.ejecting:
@@ -703,7 +799,9 @@ class App:
         if self.busy or self.ejecting:
             return
         try:
-            urls = validate_urls(self.urls.get('1.0', 'end'))
+            if not self.selected_url:
+                raise ValueError('Select a song first.')
+            urls = validate_urls(self.selected_url)
             # Also detect drives plugged in after the app opened.
             self.refresh_drives()
             destination = Path(self.drive.get())
@@ -846,7 +944,9 @@ class App:
                     elif self.remove_when_stopped:
                         self.prepare_exit(close_app=False)
                 elif isinstance(event, dict):
-                    if event.get('usb_ready'):
+                    if any(key in event for key in ('search_results', 'search_error', 'search_cancelled')):
+                        self.finish_search(event)
+                    elif event.get('usb_ready'):
                         self.progress_bar.stop()
                         self.ejecting = False
                         if self.exit_after_removal:
@@ -879,6 +979,17 @@ class App:
 if __name__ == '__main__':
     if getattr(sys, 'frozen', False):
         os.environ['PATH'] = str(bundled_tools()) + os.pathsep + os.environ.get('PATH', '')
+    if '--search-test' in sys.argv:
+        report = Path(sys.argv[sys.argv.index('--search-test') + 1])
+        try:
+            results = youtube_search.search('Jasmine Flower instrumental', downloader_command(), threading.Event(), stop_process_tree)
+            if not results:
+                raise RuntimeError('YouTube returned no search results.')
+            report.write_text(f'Live search succeeded: {len(results)} results returned.\n', encoding='utf-8')
+        except Exception as error:
+            report.write_text('Live search could not be verified on this network: ' + str(error) + '\n', encoding='utf-8')
+            sys.exit(1)
+        sys.exit(0)
     if '--conversion-test' in sys.argv:
         try:
             conversion_smoke_test()

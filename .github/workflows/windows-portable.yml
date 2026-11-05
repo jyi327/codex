@@ -5,6 +5,7 @@ on:
     paths:
       - app.py
       - windows_usb.py
+      - youtube_search.py
       - requirements-ui.txt
       - build-windows.ps1
       - tests/**
