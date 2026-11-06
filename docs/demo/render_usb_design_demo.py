@@ -105,7 +105,7 @@ DURATIONS={item['key']:item['duration'] for item in timeline}
 PHASES={
  'open':{'click1':.30,'click2':.38},
  'usb':{'insert_begin':.16,'inserted':.46},
- 'folder':{'click':.46},'delete':{'click':.46},'confirm':{'click':.55},
+ 'delete':{'click':.46},'confirm':{'click':.55},
  'search':{'field_click':.12,'typing_start':.16,'typing_end':.60,'click':.88},
  'play':{'click':.46},'stop':{'click':.46},
  'select':{'click_first':.30,'click_second':.78},
@@ -132,7 +132,7 @@ CONTROLS={
 }
 ACTIONS={
  'open':[('click1','icon'),('click2','icon')],
- 'folder':[('click','folder')],'delete':[('click','usb_delete')],'confirm':[('click','confirm_delete')],
+ 'delete':[('click','usb_delete')],'confirm':[('click','confirm_delete')],
  'search':[('field_click','field'),('click','search_button')],
  'play':[('click','play_first')],'stop':[('click','play_first')],
  'select':[('click_first','result0'),('click_second','result1')],
@@ -186,7 +186,7 @@ def caption_plan(item):
  if key=='failed':return [(0,EVENTS[key]['click']+1,title,'retry'),(EVENTS[key]['click']+1,duration,'等待完成。','progress')]
  if key=='retry':return [(0,EVENTS[key]['completed'],'等待完成。','progress')]
  if plan:return [(0,plan[0][2]+1,title,plan[0][3])]
- control={'progress':'progress','activecancel':'cancel','complete':'usb_count','more':'more'}[key]
+ control={'progress':'progress','activecancel':'cancel','complete':'usb_count','more':'more','folder':'usb_count'}[key]
  return [(0,duration,title,control)]
 
 CAPTIONS={item['key']:caption_plan(item) for item in timeline}
@@ -204,7 +204,7 @@ def state(key,p):
  i=keys.index(key);frame=local_frame(key,p)
  S=dict(connected=i>1 or (key=='usb' and hit(key,p,'connected')),
         deleted=i>7 or (key=='confirm' and hit(key,p,'click')),
-        expanded=key in ('folder','delete','confirm') and (key!='folder' or hit(key,p,'click')),
+        expanded=False,
         query='',results=[],queue=[],playing=False,busy=False,done=False,failed=False,completed=False,
         percent=0,status='Ready to download',modal=None,opened=True,
         first_done=i>=20 or (key=='progress' and hit(key,p,'first_done')))
@@ -292,7 +292,6 @@ def check_synchronization():
   frame=EVENTS[key][event];duration=DURATIONS[key]*FPS
   assert state(key,(frame-1)/duration)[field]==before,(key,field,'early response')
   assert state(key,frame/duration)[field]==after,(key,field,'late response')
- change('folder','click','expanded',False,True)
  change('delete','click','modal',None,'delete')
  change('confirm','click','deleted',False,True)
  change('play','click','playing',False,True)
@@ -347,7 +346,7 @@ def render_app(im,S):
   text(d,(MX+84,y+54),status if len(status)<25 else 'Downloading',14,'#bd3544' if status=='Failed' else '#137b60' if status=='Done' else '#748299')
   targets[f'remove{j}']=(MX+MW-52,y+22,MX+MW-23,y+52);centered(d,targets[f'remove{j}'],'×',24,'#64748b')
  if not S['queue']:text(d,(MX+30,355),'Choose songs from the results.',14,'#7b8ba2')
- # Proposed USB browser: only visible audio files and nonempty song folders.
+ # Flat USB song list, including songs found in subfolders.
  copied=2 if S['completed'] else 1 if S['first_done'] else 0
  count=0 if not S['connected'] else 5-int(S['deleted'])+copied
  rr(d,(UX,108,UX+UW,571),'#ffffff','#ccdcf2');text(d,(UX+16,118),f'USB ({count})',24,bold=True)
@@ -356,19 +355,12 @@ def render_app(im,S):
  d.line((UX+14,158,UX+UW-14,158),fill='#e1eaf7');rr(d,(UX+UW-9,170,UX+UW-5,551),'#edf2f9',r=2)
  if not S['connected']:text(d,(UX+115,320),'No USB connected',16,'#7b8ba2')
  else:
-  titles=['月亮代表我的心','甜蜜蜜']+([] if S['deleted'] else ['朋友'])+([A,B][:copied])
+  titles=['月亮代表我的心','甜蜜蜜']+([] if S['deleted'] else ['朋友'])+['小城故事','何日君再来']+([A,B][:copied])
   y=169
   for title in titles:
    music(d,UX+18,y+6,30);wrapped(d,(UX+60,y+5),title,230,17,True,maxlines=1)
    box=(UX+UW-111,y+4,UX+UW-19,y+38);button(d,box,'DELETE',red=True,disabled=S['busy']);targets['delete:'+title]=box
    d.line((UX+15,y+48,UX+UW-17,y+48),fill='#e9eff8');y+=53
-  targets['folder']=(UX+15,y+3,UX+UW-15,y+43)
-  d.line([(UX+20,y+17),(UX+27,y+24),(UX+34,y+17)] if S['expanded'] else [(UX+23,y+12),(UX+30,y+19),(UX+23,y+26)],fill='#304561',width=2)
-  foldericon(d,UX+45,y+7);text(d,(UX+88,y+5),'经典歌曲 (2)',18,bold=True);y+=47
-  if S['expanded']:
-   for title in ['小城故事','何日君再来']:
-    d.line((UX+28,y-8,UX+28,y+21,UX+49,y+21),fill='#cbd8e8',width=2);music(d,UX+57,y+5,30);text(d,(UX+98,y+7),title,17,bold=True)
-    button(d,(UX+UW-111,y+4,UX+UW-19,y+38),'DELETE',red=True);y+=46
  rr(d,(LX,583,1492,634),'#ffffff','#cbdcf1')
  rr(d,(LX+13,591,LX+47,625),'#e2eeff',r=8);ux,uy=LX+30,609;d.line((ux,uy+10,ux,uy-11),fill='#2563eb',width=3);d.polygon([(ux,uy-14),(ux-5,uy-7),(ux+5,uy-7)],fill='#2563eb');d.line((ux,uy+5,ux-8,uy,ux-8,uy-5),fill='#2563eb',width=2);d.line((ux,uy+1,ux+8,uy-4,ux+8,uy-8),fill='#2563eb',width=2)
  text(d,(LX+60,591),'USB drive',18,bold=True);text(d,(LX+190,592),'E:\\' if S['connected'] else 'No USB connected',16,'#64748b')
