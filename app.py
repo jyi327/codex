@@ -1329,6 +1329,7 @@ if __name__ == '__main__':
                 raise RuntimeError('No search results.')
             # Build check only: decode a brief real stream without needing runner speakers.
             os.environ['SDL_AUDIODRIVER'] = 'dummy'
+            os.environ['SDL_AUDIO_DRIVER'] = 'dummy'
             player = str(bundled_tools() / 'ffplay.exe') if getattr(sys, 'frozen', False) else shutil.which('ffplay')
             preview.play(results[0]['url'], downloader_command(), player, threading.Event(), stop_process_tree,
                          lambda state: None, seconds=2)

@@ -99,10 +99,13 @@ def smoke_test(player):
             audio.setparams((1, 2, 16000, 0, 'NONE', 'not compressed'))
             audio.writeframes(b''.join(struct.pack('<h', int(3000 * math.sin(2 * math.pi * 440 * i / 16000)))
                                       for i in range(4000)))
-        environment = dict(os.environ, SDL_AUDIODRIVER='dummy')
+        # SDL 2 and SDL 3 use different spellings for the audio-driver hint.
+        environment = dict(os.environ, SDL_AUDIODRIVER='dummy', SDL_AUDIO_DRIVER='dummy')
         result = subprocess.run([player, '-hide_banner', '-loglevel', 'error', '-nodisp', '-autoexit',
                         '-vn', '-i', str(tone)], env=environment, check=True,
                        stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                        creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0), timeout=15)
         if result.stderr.strip():
-            raise RuntimeError('Preview player could not decode the test audio.')
+            # This offline fixture contains no media URLs or authentication headers.
+            raise RuntimeError('Preview player could not decode the test audio: ' +
+                               result.stderr.decode('utf-8', errors='replace').strip())
