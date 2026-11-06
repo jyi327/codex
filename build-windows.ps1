@@ -1,4 +1,4 @@
-# Build-time prerequisites only: Python 3.12, FFmpeg/ffprobe and Node.js on PATH.
+# Build-time prerequisites only: Python 3.12, FFmpeg/ffprobe/ffplay and Node.js on PATH.
 $ErrorActionPreference = 'Stop'
 Set-Location $PSScriptRoot
 function Check-Exit { if ($LASTEXITCODE -ne 0) { throw "Command failed with exit code $LASTEXITCODE" } }
@@ -9,7 +9,7 @@ $python = Join-Path $PSScriptRoot '.build-venv\Scripts\python.exe'
 Check-Exit
 $tools = Join-Path $PSScriptRoot 'build\portable-tools'
 New-Item -ItemType Directory -Force $tools | Out-Null
-foreach ($tool in @('ffmpeg.exe', 'ffprobe.exe', 'node.exe')) {
+foreach ($tool in @('ffmpeg.exe', 'ffprobe.exe', 'ffplay.exe', 'node.exe')) {
     $source = (Get-Command $tool -ErrorAction Stop).Source
     if ($source -match '[\\/]chocolatey[\\/]bin[\\/]') {
         throw "Found a Chocolatey shim for $tool. Put the actual binary directory first on PATH."
@@ -48,7 +48,7 @@ $newStartup = Measure-DownloaderStartup "$downloader\yt-dlp.exe"
 $startupReport = "Downloader startup median (3 runs): self-extracting $oldStartup ms; unpackaged $newStartup ms. Measured on the build runner, not a YouTube download."
 Write-Host $startupReport
 if ($env:GITHUB_STEP_SUMMARY) { $startupReport | Out-File $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8 }
-& $python -m PyInstaller --noconfirm --clean --windowed --onedir --name YouTubeToUSB --collect-all customtkinter --add-binary "$tools\ffmpeg.exe;tools" --add-binary "$tools\ffprobe.exe;tools" --add-binary "$tools\node.exe;tools" --add-data "$downloader;tools/downloader" app.py
+& $python -m PyInstaller --noconfirm --clean --windowed --onedir --name YouTubeToUSB --collect-all customtkinter --add-binary "$tools\ffmpeg.exe;tools" --add-binary "$tools\ffprobe.exe;tools" --add-binary "$tools\ffplay.exe;tools" --add-binary "$tools\node.exe;tools" --add-data "$downloader;tools/downloader" app.py
 Check-Exit
 $smoke = Start-Process -FilePath "$PSScriptRoot\dist\YouTubeToUSB\YouTubeToUSB.exe" -ArgumentList '--smoke-test' -PassThru
 if (-not $smoke.WaitForExit(30000)) {
@@ -67,6 +67,18 @@ if ($conversion.ExitCode -ne 0) {
     if (Test-Path $conversionReport) { Get-Content $conversionReport | Write-Host }
     throw "Bundled audio conversion failed: $($conversion.ExitCode)"
 }
+$previewReport = Join-Path $PSScriptRoot 'build\preview-smoke-error.txt'
+Remove-Item $previewReport -ErrorAction SilentlyContinue
+$previewCheck = Start-Process -FilePath "$PSScriptRoot\dist\YouTubeToUSB\YouTubeToUSB.exe" -ArgumentList @('--preview-test', "`"$previewReport`"") -PassThru
+if (-not $previewCheck.WaitForExit(30000)) {
+    taskkill /PID $previewCheck.Id /T /F | Out-Null
+    throw 'Bundled preview player did not finish within 30 seconds'
+}
+if ($previewCheck.ExitCode -ne 0) {
+    if (Test-Path $previewReport) { Get-Content $previewReport | Write-Host }
+    throw "Bundled preview playback failed: $($previewCheck.ExitCode)"
+}
+Write-Host '::notice title=Audio preview::Bundled player decoded and played a test tone through a dummy audio device.'
 $searchReport = Join-Path $PSScriptRoot 'dist\YouTubeToUSB\SearchCheck.txt'
 $searchCheck = Start-Process -FilePath "$PSScriptRoot\dist\YouTubeToUSB\YouTubeToUSB.exe" -ArgumentList @('--search-test', "`"$searchReport`"") -PassThru
 if (-not $searchCheck.WaitForExit(60000)) {
@@ -89,6 +101,17 @@ if (Test-Path $searchReport) {
     throw 'Packaged search check did not produce a report'
 }
 Copy-Item README.md dist\YouTubeToUSB\README.md -Force
+$previewStreamReport = Join-Path $PSScriptRoot 'dist\YouTubeToUSB\PreviewCheck.txt'
+$previewStream = Start-Process -FilePath "$PSScriptRoot\dist\YouTubeToUSB\YouTubeToUSB.exe" -ArgumentList @('--preview-stream-test', "`"$previewStreamReport`"") -PassThru
+if (-not $previewStream.WaitForExit(90000)) {
+    taskkill /PID $previewStream.Id /T /F | Out-Null
+    'Live preview check timed out on the build network.' | Out-File $previewStreamReport -Encoding utf8
+}
+if ((Test-Path $previewStreamReport) -and (Get-Content $previewStreamReport -Raw).StartsWith('Live audio preview succeeded:')) {
+    Write-Host '::notice title=Live audio preview::Packaged app streamed a YouTube audio sample through a dummy audio device.'
+} else {
+    Write-Host '::warning title=Live audio preview::Live audio preview could not be verified on this network. See PreviewCheck.txt.'
+}
 $startupReport | Out-File dist\YouTubeToUSB\StartupTiming.txt -Encoding utf8
 Compress-Archive -Path dist\YouTubeToUSB -DestinationPath dist\YouTubeToUSB-Windows-x64.zip -Force
 Write-Host 'Built dist\YouTubeToUSB-Windows-x64.zip. Extract the entire ZIP before starting the app.'

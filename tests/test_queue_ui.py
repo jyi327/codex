@@ -117,3 +117,90 @@ class QueueUITests(unittest.TestCase):
         with patch.object(self.ui.thumbnail_pool, 'submit') as submit:
             self.ui.apply_thumbnail({'thumbnail_id': 'abcdefghijk', 'picture': None})
         submit.assert_not_called()
+
+    def test_preview_button_does_not_select_a_song_and_stop_keeps_usb(self):
+        self.ui.finish_search({'search_results': self.songs})
+        with patch.object(app.shutil, 'which', return_value=app.sys.executable), patch.object(app.threading, 'Thread'):
+            self.ui.preview_widgets[self.songs[0]['url']].invoke()
+        token = self.ui.preview_token
+        cancelled = self.ui.preview_cancel
+        self.assertEqual(self.ui.queue.items, {})
+        self.assertEqual(self.ui.preview_url, self.songs[0]['url'])
+        self.ui.apply_preview_event({'preview_token': token, 'preview_state': 'playing'})
+        self.assertEqual(self.ui.preview_widgets[self.songs[0]['url']].cget('text'), '■ STOP')
+        with patch.object(app.windows_usb, 'eject_usb') as eject:
+            self.ui.preview_widgets[self.songs[0]['url']].invoke()
+        self.assertTrue(cancelled.is_set())
+        self.assertIsNone(self.ui.preview_url)
+        self.assertEqual(self.ui.drive.get(), 'E:\\')
+        eject.assert_not_called()
+
+    def test_switching_previews_cancels_previous_and_ignores_stale_events(self):
+        self.ui.finish_search({'search_results': self.songs})
+        with patch.object(app.shutil, 'which', return_value=app.sys.executable), patch.object(app.threading, 'Thread'):
+            self.ui.preview_song(0)
+            previous = self.ui.preview_cancel
+            token = self.ui.preview_token
+            self.ui.preview_song(1)
+        self.assertTrue(previous.is_set())
+        self.ui.apply_preview_event({'preview_token': token, 'preview_state': 'error'})
+        self.assertEqual(self.ui.preview_url, self.songs[1]['url'])
+        self.assertEqual(self.ui.queue.items, {})
+        self.ui.select_song(0)
+        self.assertEqual(self.ui.preview_url, self.songs[1]['url'])
+        self.assertIn(self.songs[0]['url'], self.ui.queue.items)
+
+    def test_preview_waits_for_previous_player_before_starting(self):
+        order = []
+        previous = MagicMock()
+        previous.join.side_effect = lambda: order.append('previous stopped')
+        with patch.object(app.preview, 'play', side_effect=lambda *args: order.append('new playback')):
+            self.ui.preview_worker(1, self.songs[0]['url'], ['downloader'], 'ffplay', app.threading.Event(), previous)
+        self.assertEqual(order, ['previous stopped', 'new playback'])
+
+    def test_search_and_download_more_stop_preview_without_removing_songs(self):
+        self.ui.finish_search({'search_results': self.songs})
+        self.ui.select_song(0)
+        self.ui.search_entry.insert(0, 'Another song')
+        with patch.object(app.threading, 'Thread'):
+            cancelled = self.ui.preview_cancel
+            self.ui.search_songs()
+        self.assertTrue(cancelled.is_set())
+        self.ui.finish_search({'search_results': self.songs})
+        self.ui.preview_cancel = app.threading.Event()
+        cancelled = self.ui.preview_cancel
+        self.ui.next_song()
+        self.assertTrue(cancelled.is_set())
+        self.assertIn(self.songs[0]['url'], self.ui.queue.items)
+
+    def test_preview_buttons_fit_small_window_and_disable_during_download(self):
+        self.root.geometry('1000x560')
+        self.ui.finish_search({'search_results': self.songs})
+        self.root.deiconify()
+        self.root.update()
+        for row, check in self.ui.result_widgets:
+            self.assertLessEqual(row.winfo_rootx() + row.winfo_width(), self.root.winfo_rootx() + self.root.winfo_width())
+        for button in self.ui.preview_widgets.values():
+            self.assertLessEqual(button.winfo_rootx() + button.winfo_width(), self.root.winfo_rootx() + self.root.winfo_width())
+        self.ui.busy = True
+        self.ui.set_controls(True)
+        self.assertTrue(all(b.cget('state') == 'disabled' for b in self.ui.preview_widgets.values()))
+        self.ui.preview_song(0)
+        self.assertIsNone(self.ui.preview_url)
+
+    def test_start_and_close_cancel_preview(self):
+        self.ui.finish_search({'search_results': self.songs})
+        self.ui.select_song(0)
+        cancelled = self.ui.preview_cancel
+        with tempfile.TemporaryDirectory() as work:
+            self.ui.drive.set(work)
+            with patch.object(app, 'removable_drives', return_value=[]), patch.object(app.shutil, 'which', return_value='tool'), patch.object(app, 'downloader_command', return_value=['downloader']), patch.object(app.sys, 'frozen', True, create=True), patch.object(app.threading, 'Thread'):
+                self.ui.start()
+        self.assertTrue(cancelled.is_set())
+        self.ui.busy = False
+        self.ui.preview_cancel = app.threading.Event()
+        cancelled = self.ui.preview_cancel
+        with patch.object(self.ui, 'prepare_exit') as closing:
+            self.ui.close()
+        self.assertTrue(cancelled.is_set())
+        closing.assert_called_once()

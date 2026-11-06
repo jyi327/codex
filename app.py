@@ -22,6 +22,7 @@ from urllib.parse import urlparse, parse_qs, urlencode
 import windows_usb
 import youtube_search
 import thumbnails
+import preview
 from download_queue import DownloadQueue
 import customtkinter as ctk
 
@@ -504,6 +505,12 @@ class App:
         self.results = []
         self.selected_url = None
         self.result_widgets = []
+        self.preview_widgets = {}
+        self.preview_url = None
+        self.preview_token = 0
+        self.preview_cancel = threading.Event()
+        self.preview_thread = None
+        self.preview_state = None
         self.queue = DownloadQueue()
         self.queue_widgets = {}
         self.thumbnail_cache = OrderedDict()
@@ -619,6 +626,7 @@ class App:
         self.details_text.configure(state='disabled')
 
     def destroy_window(self):
+        self.stop_preview()
         pool = getattr(self, 'thumbnail_pool', None)
         if pool is not None:
             pool.shutdown(wait=False, cancel_futures=True)
@@ -665,6 +673,7 @@ class App:
         except (ValueError, FileNotFoundError) as error:
             self.show_progress(str(error))
             return
+        self.stop_preview()
         self.busy = True
         self.searching = True
         self.download_complete = False
@@ -759,6 +768,7 @@ class App:
         for child in self.result_frame.winfo_children():
             child.destroy()
         self.result_widgets = []
+        self.preview_widgets = {}
         self.result_thumbnail_slots = {}
         if not self.results:
             ctk.CTkLabel(self.result_frame, text=message, font=(self.interface_font, 15), text_color='#64748b', wraplength=400).grid(row=0, column=0, sticky='ew', pady=25)
@@ -774,17 +784,95 @@ class App:
             subtitle = ctk.CTkLabel(row, text=result.get('channel', ''), font=(self.interface_font, 13), text_color='#64748b', anchor='w', wraplength=330)
             subtitle.grid(row=1, column=1, sticky='ew', pady=(0, 10))
             check = ctk.CTkLabel(row, text='', width=30, font=(self.interface_font, 24, 'bold'), text_color='#2563eb')
-            check.grid(row=0, column=2, rowspan=2, padx=8)
+            check.grid(row=0, column=2, padx=8, pady=(6, 0))
+            play_button = ctk.CTkButton(row, text='▶ Preview', width=110, height=32, corner_radius=9,
+                                       font=(self.interface_font, 13, 'bold'), fg_color='#e7f0ff',
+                                       hover_color='#d7e6ff', text_color='#1d4ed8',
+                                       command=lambda i=index: self.preview_song(i))
+            play_button.grid(row=1, column=2, padx=(0, 10), pady=(0, 10))
+            self.preview_widgets[result['url']] = play_button
             for target in (row, thumbnail, *thumbnail.winfo_children(), title, subtitle, check):
                 target.bind('<Button-1>', lambda event, i=index: self.select_song(i))
             def fit_title(event, label=title, channel=subtitle, card=row):
-                width = max(150, int(event.width / card._get_widget_scaling()) - 220)
+                width = max(100, int(event.width / card._get_widget_scaling()) - 300)
                 label.configure(wraplength=width)
                 channel.configure(wraplength=width)
             row.bind('<Configure>', fit_title)
             self.result_widgets.append((row, check))
         self.refresh_checks()
+        self.refresh_preview_buttons()
         self.load_thumbnails()
+
+    def refresh_preview_buttons(self):
+        for url, button in getattr(self, 'preview_widgets', {}).items():
+            active = url == self.preview_url
+            text = ('■ Loading…' if self.preview_state == 'loading' else '■ STOP') if active else '▶ Preview'
+            button.configure(text=text, state='disabled' if self.busy or self.ejecting else 'normal',
+                             fg_color='#2563eb' if active else '#e7f0ff',
+                             text_color='white' if active else '#1d4ed8')
+
+    def stop_preview(self):
+        event = getattr(self, 'preview_cancel', None)
+        if event is not None:
+            event.set()
+        self.preview_token = getattr(self, 'preview_token', 0) + 1
+        self.preview_url = None
+        self.preview_state = None
+        self.refresh_preview_buttons()
+
+    def preview_song(self, index):
+        if self.busy or self.ejecting or not 0 <= index < len(self.results):
+            return
+        url = self.results[index]['url']
+        if self.preview_url == url:
+            self.stop_preview()
+            return
+        try:
+            player = str(bundled_tools() / 'ffplay.exe') if getattr(sys, 'frozen', False) else shutil.which('ffplay')
+            if not player or not Path(player).is_file():
+                raise FileNotFoundError('Preview player is missing. Extract the complete ZIP again.')
+            downloader = downloader_command()
+        except FileNotFoundError as error:
+            self.show_progress(str(error), 0)
+            return
+        self.stop_preview()
+        self.preview_url = url
+        self.preview_state = 'loading'
+        self.preview_cancel = threading.Event()
+        previous = self.preview_thread
+        self.preview_thread = threading.Thread(target=self.preview_worker,
+            args=(self.preview_token, url, downloader, player, self.preview_cancel, previous), daemon=False)
+        self.refresh_preview_buttons()
+        self.preview_thread.start()
+
+    def preview_worker(self, token, url, downloader, player, cancel, previous):
+        # Wait off the UI thread so two samples can never overlap, even on rapid clicks.
+        if previous is not None:
+            previous.join()
+        if cancel.is_set():
+            return
+        def notify(state):
+            self.events.put({'preview_token': token, 'preview_state': state})
+        try:
+            preview.play(url, downloader, player, cancel, stop_process_tree, notify)
+        except preview.PreviewCancelled:
+            return
+        except Exception:
+            notify('error')
+        else:
+            notify('finished')
+
+    def apply_preview_event(self, event):
+        if event['preview_token'] != self.preview_token:
+            return
+        self.preview_state = event['preview_state']
+        if self.preview_state in ('finished', 'error'):
+            failed = self.preview_state == 'error'
+            self.stop_preview()
+            if failed and not self.busy and not self.ejecting:
+                self.show_progress('Preview unavailable. Please try another song.', 0)
+        else:
+            self.refresh_preview_buttons()
 
     def refresh_checks(self):
         for song, (row, check) in zip(self.results, self.result_widgets):
@@ -865,6 +953,7 @@ class App:
     def next_song(self):
         if self.busy or self.ejecting:
             return
+        self.stop_preview()
         self.download_complete = False
         self.cancel_event.clear()
         self.remove_when_stopped = False
@@ -893,8 +982,10 @@ class App:
         self.drive.configure(state='disabled' if busy else 'normal')
         self.next_button.configure(state='disabled' if busy else 'normal')
         self.update_start_state()
+        self.refresh_preview_buttons()
 
     def cancel(self):
+        self.stop_preview()
         if not self.busy and not self.ejecting:
             self.queue.clear()
             self.selected_url = None
@@ -912,6 +1003,7 @@ class App:
             self.show_progress('Stopping search…' if self.searching else 'Stopping… Please keep the USB plugged in.')
 
     def close(self):
+        self.stop_preview()
         if self.ejecting:
             return
         if self.busy:
@@ -921,6 +1013,7 @@ class App:
             self.prepare_exit()
 
     def prepare_exit(self, close_app=True):
+        self.stop_preview()
         if self.busy or self.ejecting:
             return
         if close_app:
@@ -996,6 +1089,7 @@ class App:
         except (ValueError, ImportError, FileNotFoundError) as error:
             messagebox.showerror('Cannot start', str(error))
             return
+        self.stop_preview()
         self.busy = True
         self.download_complete = False
         self.remove_when_stopped = False
@@ -1142,7 +1236,9 @@ class App:
                     elif self.remove_when_stopped:
                         self.prepare_exit(close_app=False)
                 elif isinstance(event, dict):
-                    if 'thumbnail_id' in event:
+                    if 'preview_token' in event:
+                        self.apply_preview_event(event)
+                    elif 'thumbnail_id' in event:
                         self.apply_thumbnail(event)
                     elif 'song_url' in event:
                         self.apply_song_event(event)
@@ -1214,6 +1310,31 @@ if __name__ == '__main__':
         except Exception:
             import traceback
             Path(sys.argv[sys.argv.index('--conversion-test') + 1]).write_text(traceback.format_exc(), encoding='utf-8')
+            sys.exit(1)
+        sys.exit(0)
+    if '--preview-test' in sys.argv:
+        try:
+            player = str(bundled_tools() / 'ffplay.exe') if getattr(sys, 'frozen', False) else shutil.which('ffplay')
+            preview.smoke_test(player)
+        except Exception:
+            import traceback
+            Path(sys.argv[sys.argv.index('--preview-test') + 1]).write_text(traceback.format_exc(), encoding='utf-8')
+            sys.exit(1)
+        sys.exit(0)
+    if '--preview-stream-test' in sys.argv:
+        report = Path(sys.argv[sys.argv.index('--preview-stream-test') + 1])
+        try:
+            results = youtube_search.search('Jasmine Flower instrumental', downloader_command(), threading.Event(), stop_process_tree)
+            if not results:
+                raise RuntimeError('No search results.')
+            # Build check only: decode a brief real stream without needing runner speakers.
+            os.environ['SDL_AUDIODRIVER'] = 'dummy'
+            player = str(bundled_tools() / 'ffplay.exe') if getattr(sys, 'frozen', False) else shutil.which('ffplay')
+            preview.play(results[0]['url'], downloader_command(), player, threading.Event(), stop_process_tree,
+                         lambda state: None, seconds=2)
+            report.write_text('Live audio preview succeeded: streamed a YouTube audio sample through a dummy audio device.\n', encoding='utf-8')
+        except Exception:
+            report.write_text('Live audio preview could not be verified on this network.\n', encoding='utf-8')
             sys.exit(1)
         sys.exit(0)
     root = ctk.CTk()

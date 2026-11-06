@@ -8,6 +8,7 @@ on:
       - youtube_search.py
       - download_queue.py
       - thumbnails.py
+      - preview.py
       - requirements-ui.txt
       - build-windows.ps1
       - tests/**
