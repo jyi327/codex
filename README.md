@@ -2,9 +2,13 @@
 
 Windows desktop app for finding a YouTube song, converting its audio to 192 kbps MP3, and copying it directly into a flash drive’s root folder. Type a song name or artist, click SEARCH, tick one or more results, review the Download list on the right, and click START. The paste-link option is removed. Local downloads are retained, USB filenames have no spaces or trailing video IDs, and copies are verified with SHA-256. Existing files are never overwritten.
 
-## Previous-version video guide
+## Video guide
 
-以下视频演示旧版的粘贴网址流程，**不适用于当前搜索界面**。[观看旧版 37 秒普通话示范](docs/YouTubeToUSB-Mandarin-Guide.mp4)：从桌面双击程序，到浏览器搜索歌曲、复制网址、粘贴到程序，再点击 START。包含普通话合成配音和中文字幕；桌面及 YouTube 页面为模拟操作，不实际下载歌曲。
+[观看 69 秒操作示范（华语配音＋中文字幕）](docs/YouTubeToUSB-Malaysia-Chinese-Demo.mp4) · [下载字幕](docs/YouTubeToUSB-Malaysia-Chinese-Demo.srt)
+
+从电脑桌面打开程序，搜索「可可拓海牧羊人」，选择两首歌、移除一首，示范 CANCEL 清空选择，再下载歌曲并点击 DONE。使用马来西亚华语用词（如「手指」）及合成普通话配音；画面采用当前程序界面，搜索结果和传输过程为模拟示范，等待时间已缩短。只连接一支手指，无须选择磁盘。
+
+旧版粘贴网址视频保留在 `docs/YouTubeToUSB-Mandarin-Guide.mp4`，不适用于当前搜索界面。
 
 ## Portable Windows app (no installation)
 
