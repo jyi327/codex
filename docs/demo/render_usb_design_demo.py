@@ -24,14 +24,18 @@ steps=[
 ('search2','继续搜索其他歌曲，例如「选择」。',6),
 ('add2','点击歌曲，加入下载列表。',3.5),
 ('start','按 START 开始下载。',3.5),
-('progress','等待完成，先不要拔出 USB。',5),
-('failed','下载失败，按 RETRY FAILED。',4),
-('retry','等待完成。',3.5),
-('complete','下载完成。可按 DONE 关闭程序。',4),
+('progress','正在下载歌曲。',4),
+('activecancel','需要停止下载时，可按 CANCEL。',4),
+('finishfirst','等待下载完成。',3),
+('complete','歌曲已存入 USB。',3.5),
 ('more','要继续下载，按 DOWNLOAD MORE。',4),
-('reselect','点击歌曲，加入新的下载列表。',3),
-('clear','不想下载了，按 CANCEL 清空选择。',3.5),
-('done','按 × 关闭程序。',3.5),
+('search3','搜索下一首想下载的歌曲。',7),
+('add3','点击歌曲，加入下载列表。',3.5),
+('start2','按 START 开始下载。',3.5),
+('progress2','正在下载歌曲。',4),
+('failed','下载失败，按 RETRY FAILED 重试。',4.5),
+('retry','正在重试，等待完成。',4),
+('finalcomplete','下载完成，歌曲已存入 USB。',4),
 ]
 timeline=[];at=0
 for key,subtitle,duration in steps:
@@ -94,9 +98,9 @@ def desktop():
  return im
 BASE=desktop()
 LX,LW,MX,MW,UX,UW=108,560,680,360,1052,440
-A='可可托海的牧羊人';B='选择';BAD=A+'｜女声版'
+A='可可托海的牧羊人';B='选择';C='海阔天空';BAD=A+'｜女声版'
 # Stable story phases keep data transitions independent of removed explanatory scenes.
-keys=['open','usb','count','filter','folder','refresh','delete','confirm','deleted','search','play','stop','select','remove','clear','reselect','search2','add2','start','progress','activecancel','details','failed','retry','complete','more','done']
+keys=[item['key'] for item in timeline]
 
 
 # All visible responses, click markers, motion and captions share these frame events.
@@ -108,15 +112,17 @@ PHASES={
  'search':{'field_click':.12,'typing_start':.16,'typing_end':.60,'click':.88},
  'play':{'click':.46},'stop':{'click':.46},
  'select':{'click_first':.30,'click_second':.78},
- 'remove':{'click':.46},'clear':{'click':.46},'reselect':{'click':.46},
+ 'remove':{'click':.46},
  'search2':{'field_click':.12,'typing_start':.16,'typing_end':.45,'click':.88},
  'add2':{'click':.46},'start':{'click':.46},'progress':{'first_done':.96},
- 'failed':{'click':.58},'retry':{'completed':.86},'more':{'click':.46},'done':{'click':.52},
+ 'search3':{'field_click':.12,'typing_start':.16,'typing_end':.60,'click':.88},
+ 'add3':{'click':.46},'start2':{'click':.46},
+ 'failed':{'click':.58},'retry':{'completed':.86},'more':{'click':.46},
 }
 EVENTS={key:{name:round(phase*DURATIONS[key]*FPS) for name,phase in values.items()} for key,values in PHASES.items()}
 EVENTS['open']['opened']=EVENTS['open']['click2']+4
 EVENTS['usb']['connected']=EVENTS['usb']['inserted']+10
-for key in ('search','search2'):
+for key in ('search','search2','search3'):
  EVENTS[key]['results']=EVENTS[key]['click']+8
 CONTROLS={
  'icon':(116,127,172,183),'usb_insert':(866,924,891,951),
@@ -135,10 +141,12 @@ ACTIONS={
  'search':[('field_click','field'),('click','search_button')],
  'play':[('click','play_first')],'stop':[('click','play_first')],
  'select':[('click_first','result0'),('click_second','result1')],
- 'remove':[('click','remove1')],'clear':[('click','cancel')],'reselect':[('click','result0')],
+ 'remove':[('click','remove1')],
  'search2':[('field_click','field'),('click','search_button')],
  'add2':[('click','result0')],'start':[('click','start')],'failed':[('click','retry')],
- 'more':[('click','more')],'done':[('click','close')],
+ 'more':[('click','more')],
+ 'search3':[('field_click','field'),('click','search_button')],
+ 'add3':[('click','result0')],'start2':[('click','start')],
 }
 
 def local_frame(key,p):return round(p*DURATIONS[key]*FPS)
@@ -148,7 +156,7 @@ def motion_plan(key):
  for event,control in ACTIONS.get(key,[]):
   click=EVENTS[key][event];arrival=click-3
   begin=max(0,previous+2,arrival-18)
-  if key in ('search','search2') and event=='click':
+  if key in ('search','search2','search3') and event=='click':
    begin=max(begin,EVENTS[key]['typing_end']+8)
   result.append((begin,arrival,click,control));previous=click
  return result
@@ -175,9 +183,9 @@ def pulse_at(key,frame):
 
 def caption_plan(item):
  key=item['key'];duration=round(item['duration']*FPS);title=item['subtitle'];plan=motion_plan(key)
- if key in ('search','search2'):
+ if key in ('search','search2','search3'):
   switch=plan[1][0]
-  return [(0,switch,'输入想下载的歌名。' if key=='search' else '输入下一首歌名，例如「选择」。','field'),
+  return [(0,switch,'输入想下载的歌名。' if key=='search' else '输入下一首歌名。','field'),
           (switch,EVENTS[key]['click']+1,'按 SEARCH 搜索。','search_button')]
  if key=='open':return [(0,EVENTS[key]['opened']+1,title,'icon')]
  if key=='usb':return [(0,EVENTS[key]['connected']+1,title,'usb_insert')]
@@ -185,7 +193,7 @@ def caption_plan(item):
  if key=='failed':return [(0,EVENTS[key]['click']+1,title,'retry'),(EVENTS[key]['click']+1,duration,'等待完成。','progress')]
  if key=='retry':return [(0,EVENTS[key]['completed'],'等待完成。','progress')]
  if plan:return [(0,plan[0][2]+1,title,plan[0][3])]
- control={'progress':'progress','activecancel':'cancel','complete':'done','more':'more','folder':'usb_count'}[key]
+ control={'progress':'progress','activecancel':'cancel','complete':'usb_count','finalcomplete':'usb_count','finishfirst':'progress','progress2':'progress','more':'more','folder':'usb_count'}[key]
  return [(0,duration,title,control)]
 
 CAPTIONS={item['key']:caption_plan(item) for item in timeline}
@@ -201,60 +209,56 @@ for item in timeline:
 
 def state(key,p):
  i=keys.index(key);frame=local_frame(key,p)
- S=dict(connected=i>1 or (key=='usb' and hit(key,p,'connected')),
-        deleted=i>7 or (key=='confirm' and hit(key,p,'click')),
-        expanded=False,
-        query='',results=[],queue=[],playing=False,busy=False,done=False,failed=False,completed=False,
-        percent=0,status='Ready to download',modal=None,opened=True,
-        first_done=i>=20 or (key=='progress' and hit(key,p,'first_done')))
+ after=lambda scene:i>keys.index(scene)
+ original=[A,BAD,A+'｜纯音乐'];duets=[B+'｜林子祥、叶倩文',B+'｜经典对唱版'];new=[C+'｜Beyond',C+'｜现场版']
+ S=dict(connected=after('usb') or (key=='usb' and hit(key,p,'connected')),
+        deleted=after('confirm') or (key=='confirm' and hit(key,p,'click')),
+        expanded=False,query='',results=[],queue=[],playing=False,busy=False,done=False,
+        failed=False,completed=False,percent=0,status='Ready to download',modal=None,
+        opened=True,first_done=False,library_copied=0,active_index=0)
  if key=='open':S['opened']=hit(key,p,'opened')
- if key=='done':S['opened']=not hit(key,p,'click')
- if i>=9:S['query']='可可拓海牧羊人';S['results']=[A,BAD,A+'｜纯音乐']
+ if key=='delete' and hit(key,p,'click'):S['modal']='delete'
+ if key=='confirm' and not hit(key,p,'click'):S['modal']='delete'
+ if i>=keys.index('search'):S.update(query='可可拓海牧羊人',results=original)
  if key=='play':S['playing']=hit(key,p,'click')
  if key=='stop':S['playing']=not hit(key,p,'click')
  if key=='select':S['queue']=[A,BAD] if hit(key,p,'click_second') else [A] if hit(key,p,'click_first') else []
  if key=='remove':S['queue']=[A] if hit(key,p,'click') else [A,BAD]
- if key=='clear':S['queue']=[] if hit(key,p,'click') else [A]
- if key=='reselect':S['queue']=[A] if hit(key,p,'click') else []
- if i>=16:S['queue']=[A];S['query']='选择';S['results']=[B+'｜林子祥、叶倩文',B+'｜经典对唱版']
- if key in ('search','search2'):
-  events=EVENTS[key];query='可可拓海牧羊人' if key=='search' else '选择'
-  begin,end=events['typing_start'],events['typing_end']
-  old='可可拓海牧羊人' if key=='search2' else ''
-  erase_end=begin+12 if old else begin
+ if i>=keys.index('search2'):S.update(queue=[A],query='选择',results=duets)
+ if after('add2') or (key=='add2' and hit(key,p,'click')):S['queue']=[A,B]
+ if key=='start':S.update(busy=hit(key,p,'click'),status='Preparing download' if hit(key,p,'click') else 'Ready to download')
+ if key in ('progress','activecancel','finishfirst'):
+  percent=int(p*50) if key=='progress' else 50+int(p*25) if key=='activecancel' else 75+int(p*25)
+  S.update(busy=True,percent=percent,first_done=percent>=50,library_copied=int(percent>=50),active_index=int(percent>=50),
+           status='Copying to USB…' if percent>=95 else 'Making MP3…' if percent>=85 else 'Downloading…')
+ if i>=keys.index('complete'):S.update(completed=True,done=True,percent=100,status='2 songs copied · 0 failed',library_copied=2)
+ if (key=='more' and hit(key,p,'click')) or after('more'):
+  S.update(queue=[],completed=False,done=False,percent=0,status='Ready to download',library_copied=2)
+ if i>=keys.index('search3'):S.update(query=C,results=new)
+ if key in ('search','search2','search3'):
+  events=EVENTS[key];query={'search':'可可拓海牧羊人','search2':'选择','search3':C}[key]
+  old={'search':'','search2':'可可拓海牧羊人','search3':'选择'}[key]
+  oldresults={'search':[],'search2':original,'search3':duets}[key]
+  results={'search':original,'search2':duets,'search3':new}[key]
+  begin,end=events['typing_start'],events['typing_end'];erase_end=begin+12 if old else begin
   if frame<begin:S['query']=old
-  elif frame<erase_end:
-   remaining=max(0,len(old)-int((frame-begin+1)*len(old)/(erase_end-begin)))
-   S['query']=old[:remaining]
-  else:
-   count=max(0,min(len(query),int((frame-erase_end+1)*len(query)/max(1,end-erase_end+1))))
-   S['query']=query[:count]
+  elif frame<erase_end:S['query']=old[:max(0,len(old)-int((frame-begin+1)*len(old)/(erase_end-begin)))]
+  else:S['query']=query[:max(0,min(len(query),int((frame-erase_end+1)*len(query)/max(1,end-erase_end+1))))]
   S['typing']=hit(key,p,'field_click') and not hit(key,p,'click')
-  if not hit(key,p,'click'):
-   S['results']=[] if key=='search' else [A,BAD,A+'｜纯音乐']
-  elif not hit(key,p,'results'):
-   S['results']=[];S['busy']=True;S['status']='Searching…'
-  else:
-   S['results']=[A,BAD,A+'｜纯音乐'] if key=='search' else [B+'｜林子祥、叶倩文',B+'｜经典对唱版']
- if i>=18 or (key=='add2' and hit(key,p,'click')):S['queue']=[A,B]
- if key=='start':S['busy']=hit(key,p,'click');S['status']='Preparing download' if S['busy'] else 'Ready to download'
- if key in ('progress','activecancel','details'):
-  S['busy']=True;S['percent']=min(100,int(p*100)) if key=='progress' else 45
-  S['status']='Downloading…' if p<.5 else 'Making MP3…' if p<.75 else 'Copying to USB…'
- if key=='delete' and hit(key,p,'click'):S['modal']='delete'
- if key=='confirm' and not hit(key,p,'click'):S['modal']='delete'
+  if not hit(key,p,'click'):S['results']=oldresults
+  elif not hit(key,p,'results'):S.update(results=[],busy=True,status='Searching…')
+  else:S['results']=results
+ if after('add3') or (key=='add3' and hit(key,p,'click')):S['queue']=[C]
+ if key=='start2':S.update(busy=hit(key,p,'click'),status='Preparing download' if hit(key,p,'click') else 'Ready to download')
+ if key=='progress2':S.update(busy=True,percent=int(p*50),status='Downloading…')
  if key=='failed':
-  if not hit(key,p,'click'):S['failed']=True;S['status']='1 song copied · 1 failed';S['percent']=100
-  else:
-   S['busy']=True;S['percent']=int(35*(frame-EVENTS[key]['click'])/max(1,round(DURATIONS[key]*FPS)-EVENTS[key]['click']-1));S['status']='Retrying song…'
+  if not hit(key,p,'click'):S.update(failed=True,percent=50,status='Download failed · please retry')
+  else:S.update(busy=True,percent=int(10*(frame-EVENTS[key]['click'])/max(1,round(DURATIONS[key]*FPS)-EVENTS[key]['click'])),status='Retrying song…')
  if key=='retry':
-  S['busy']=not hit(key,p,'completed');S['percent']=min(100,35+int(65*frame/max(1,EVENTS[key]['completed'])));S['status']='Retrying song…'
- if i>=24 or (key=='retry' and hit(key,p,'completed')):S.update(completed=True,done=True,status='2 songs copied · 0 failed',percent=100)
- if key=='more' and hit(key,p,'click') or key in ('reselect','clear','done'):
-  S.update(queue=[],completed=False,done=False,busy=False,failed=False,percent=0,
-           status='Ready to download',query='选择',results=[B+'｜林子祥、叶倩文',B+'｜经典对唱版'],library_copied=2)
-  if key=='reselect' and hit(key,p,'click'):S['queue']=[B]
-  if key=='clear' and not hit(key,p,'click'):S['queue']=[B]
+  finished=hit(key,p,'completed')
+  S.update(busy=not finished,completed=finished,done=finished,percent=min(100,10+int(90*frame/max(1,EVENTS[key]['completed']))),
+           status='1 song copied · 0 failed' if finished else 'Retrying song…',library_copied=3 if finished else 2)
+ if key=='finalcomplete':S.update(completed=True,done=True,percent=100,status='1 song copied · 0 failed',library_copied=3)
  if not S['connected']:S['status']='No USB connected'
  return S
 
@@ -303,16 +307,15 @@ def check_synchronization():
  change('select','click_first','queue',[],[A])
  change('select','click_second','queue',[A],[A,BAD])
  change('remove','click','queue',[A,BAD],[A])
- change('clear','click','queue',[B],[])
- change('reselect','click','queue',[],[B])
  change('add2','click','queue',[A],[A,B])
  change('start','click','busy',False,True)
  change('failed','click','busy',False,True)
  change('more','click','done',True,False)
- change('done','click','opened',True,False)
- for key in ('search','search2'):
+ change('add3','click','queue',[],[C])
+ change('start2','click','busy',False,True)
+ for key in ('search','search2','search3'):
   change(key,'click','busy',False,True)
-  assert state(key,.4)['query'] not in ('','可可拓海牧羊人' if key=='search' else '选择')
+  assert state(key,.4)['typing']
  assert EVENTS['usb']['connected']>EVENTS['usb']['inserted']
  (OUT/'synchronization-checks.json').write_text(json.dumps(checks,ensure_ascii=False,indent=2),encoding='utf-8')
  print('Verified',len(checks),'clicks: cursor arrival, marker and caption share each event frame.',flush=True)
@@ -335,7 +338,7 @@ def render_app(im,S):
   rr(d,(x+w-9,265,x+w-5,551),'#edf2f9',r=2)
  if not S['results']:text(d,(LX+105,355),'Search for a song to begin.',16,'#7b8ba2')
  for j,title in enumerate(S['results']):
-  y=263+j*98;selected=(title==A and A in S['queue']) or (title==BAD and BAD in S['queue']) or (title.startswith(B+'｜') and B in S['queue'] and j==0)
+  y=263+j*98;selected=(title==A and A in S['queue']) or (title==BAD and BAD in S['queue']) or (title.startswith(B+'｜') and B in S['queue'] and j==0) or (title.startswith(C+'｜') and C in S['queue'] and j==0)
   rr(d,(LX+9,y,LX+LW-16,y+90),'#edf4ff' if selected else '#ffffff','#90b7fa' if selected else '#e4ecf7',9)
   thumb(d,(LX+20,y+13,LX+129,y+76),j)
   wrapped(d,(LX+142,y+12),title,252,16,True)
@@ -347,7 +350,7 @@ def render_app(im,S):
   y=264+j*92;rr(d,(MX+10,y,MX+MW-16,y+82),'white','#e1eaf7',9)
   thumb(d,(MX+20,y+15,MX+73,y+51),j)
   wrapped(d,(MX+84,y+9),title,212,16,True)
-  status='Done' if S['completed'] or ((S['failed'] or S['first_done']) and j==0) else 'Failed' if S['failed'] and j==1 else S['status'].replace('…','') if S['busy'] and j==(0 if keys.index(current_key)<=19 else 1) else 'Waiting'
+  status='Done' if S['completed'] or (S['first_done'] and j==0) else 'Failed' if S['failed'] else S['status'].replace('…','') if S['busy'] and j==S['active_index'] else 'Waiting'
   text(d,(MX+84,y+54),status if len(status)<25 else 'Downloading',14,'#bd3544' if status=='Failed' else '#137b60' if status=='Done' else '#748299')
   targets[f'remove{j}']=(MX+MW-52,y+22,MX+MW-23,y+52);centered(d,targets[f'remove{j}'],'×',24,'#64748b')
  if not S['queue']:text(d,(MX+30,355),'Choose songs from the results.',14,'#7b8ba2')
@@ -360,7 +363,7 @@ def render_app(im,S):
  d.line((UX+14,158,UX+UW-14,158),fill='#e1eaf7');rr(d,(UX+UW-9,170,UX+UW-5,551),'#edf2f9',r=2)
  if not S['connected']:text(d,(UX+115,320),'No USB connected',16,'#7b8ba2')
  else:
-  titles=['月亮代表我的心','甜蜜蜜']+([] if S['deleted'] else ['朋友'])+['小城故事','何日君再来']+([A,B][:copied])
+  titles=['月亮代表我的心','甜蜜蜜']+([] if S['deleted'] else ['朋友'])+['小城故事','何日君再来']+([A,B,C][:copied])
   y=169
   for title in titles:
    music(d,UX+18,y+6,30);wrapped(d,(UX+60,y+5),title,230,17,True,maxlines=1)
@@ -423,7 +426,7 @@ try:
    title,control=caption;focus=CONTROLS[control]
    caption_width=min(1480,max(270,fonts[(28,False)].getlength(title)+48))
    focus_x=max(30,min(W-30,(focus[0]+focus[2])/2))
-   caption_x=(LX+1040)/2 if current_key in ('search','search2') else focus_x
+   caption_x=(LX+1040)/2 if current_key in ('search','search2','search3') else focus_x
    cap_left=max(16,min(W-16-caption_width,caption_x-caption_width/2))
    cap_top=focus[1]-86;below=cap_top<64
    if below:cap_top=focus[3]+25
