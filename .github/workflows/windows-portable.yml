@@ -44,8 +44,12 @@ jobs:
           if (-not (Test-Path 'tests/test_workflow.py')) {
             throw 'Missing tests/test_workflow.py. Upload the complete tests folder to the repository root on this branch.'
           }
-          python -m unittest discover -s tests -t . -v
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -m unittest discover -s tests -t . -v 2>&1 | Tee-Object -FilePath test-results.txt
+          if ($LASTEXITCODE -ne 0) {
+            $testError = (Get-Content test-results.txt -Tail 45) -join '%0A'
+            Write-Host "::error title=Windows tests::$testError"
+            exit $LASTEXITCODE
+          }
       - name: Package standalone application
         shell: pwsh
         run: ./build-windows.ps1
