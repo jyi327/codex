@@ -242,7 +242,11 @@ try:
   if p>.93:last=xy
   d=ImageDraw.Draw(im)
   rr(d,(950,39,1528,68),'#f1f6ff',r=8);text(d,(965,42),'设计演示 · USB 面板待实现 · 等待已缩短',18,'#536780')
-  rr(d,(46,935,1554,993),'#13233c',r=16);centered(d,(60,938,1540,990),item['subtitle'],30,'white')
+  # Keep instructions above the laptop, without covering any app controls.
+  frame=Image.new('RGB',(W,H),'#e7edf6')
+  frame.paste(im.resize((1536,960),Image.Resampling.LANCZOS),(32,84))
+  im=frame;d=ImageDraw.Draw(im)
+  rr(d,(46,8,1554,76),'#13233c',r=16);centered(d,(60,11,1540,73),item['subtitle'],30,'white')
   if current_key in ('folder','confirm','play','failed','complete','more') and .72<=p<.72+1/(FPS*item['duration']):im.save(OUT/f'preview-{current_key}.png')
   if n%200==0:print(f'{t:.0f}s / {DURATION:.0f}s',flush=True)
   enc.stdin.write(im.tobytes())
