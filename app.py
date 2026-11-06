@@ -586,7 +586,7 @@ class App:
         self.cancel_button = ctk.CTkButton(self.action_frame, text='×  CANCEL', height=50, corner_radius=14, border_width=1, border_color='#c6d6ec', font=(interface_font, 19, 'bold'), fg_color='white', hover_color='#e8f0fc', text_color='#526177', text_color_disabled='#9aa9bd', command=self.cancel, state='disabled')
         self.cancel_button.pack(side='left', fill='x', expand=True, padx=(8, 0))
         self.complete_frame = ctk.CTkFrame(self.button_area, fg_color='transparent')
-        self.next_button = ctk.CTkButton(self.complete_frame, text='NEXT SONG', height=50, corner_radius=14, font=(interface_font, 18, 'bold'), fg_color='#2563eb', hover_color='#1d4ed8', text_color='white', command=self.next_song)
+        self.next_button = ctk.CTkButton(self.complete_frame, text='DOWNLOAD MORE', height=50, corner_radius=14, font=(interface_font, 18, 'bold'), fg_color='#2563eb', hover_color='#1d4ed8', text_color='white', command=self.next_song)
         self.next_button.pack(side='left', fill='x', expand=True, padx=(0, 8))
         self.done_button = ctk.CTkButton(self.complete_frame, text='✓  DONE', height=50, corner_radius=14, border_width=1, border_color='#c6d6ec', font=(interface_font, 18, 'bold'), fg_color='white', hover_color='#e8f0fc', text_color='#526177', command=self.close)
         self.done_button.pack(side='left', fill='x', expand=True, padx=(8, 0))

@@ -4,9 +4,9 @@ Windows desktop app for finding a YouTube song, converting its audio to 192 kbps
 
 ## Video guide
 
-[观看 64 秒操作示范（无配音，中文字幕）](docs/YouTubeToUSB-Malaysia-Chinese-Demo.mp4) · [下载字幕](docs/YouTubeToUSB-Malaysia-Chinese-Demo.srt)
+[观看 86 秒操作示范（无配音，中文字幕）](docs/YouTubeToUSB-Malaysia-Chinese-Demo.mp4) · [下载字幕](docs/YouTubeToUSB-Malaysia-Chinese-Demo.srt)
 
-从电脑桌面打开程序，搜索想下载的歌曲，点击加入下载列表，示范移除选错的歌曲及 CANCEL 清空选择；再搜索「选择」并加入同一个列表，下载两首歌曲后点击 DONE。仅显示中文字幕，无配音，不讲解安全移除 USB。画面采用当前程序界面，搜索结果和传输过程为模拟示范，等待时间已缩短。只连接一个 USB，无须选择磁盘。
+从电脑桌面打开程序，搜索想下载的歌曲，点击加入下载列表，示范移除选错的歌曲及 CANCEL 清空选择；再搜索「选择」并加入同一个列表，下载完成后点击 DOWNLOAD MORE 继续添加并下载新歌曲，最后点击 DONE。仅显示中文字幕，无配音，不讲解安全移除 USB。画面采用当前程序界面，搜索结果和传输过程为模拟示范，等待时间已缩短。只连接一个 USB，无须选择磁盘。
 
 旧版粘贴网址视频保留在 `docs/YouTubeToUSB-Mandarin-Guide.mp4`，不适用于当前搜索界面。
 
@@ -40,7 +40,7 @@ Python 3.12+, Tkinter, FFmpeg/ffprobe, and the dependency in `requirements.txt` 
 
 The interface uses large text, high-contrast Start and Cancel buttons, and a compact links-and-drive layout. Search and selection replace the link box; technical messages stay under Details. The page scrolls on smaller screens. Alt+S starts and Escape cancels. USB drives are checked automatically every 1.5 seconds; START is disabled when no drive is connected.
 
-Cancel stops the downloader and its conversion process, or interrupts a USB copy/check between chunks. Keep the USB connected while stopping or preparing it for removal. Songs already copied remain; an unfinished copy created by this operation is removed. Local download files are retained. Cancel and the window close button stop an active transfer, wait for cleanup, then ask Windows to prepare the dedicated USB for removal. NEXT SONG and DONE appear together only after all songs are copied and verified. NEXT SONG clears the search field for another search while keeping the same USB connected and retaining the download list. DONE still hides the window immediately and completes safe removal in the background. After successful removal following Cancel, reconnect the USB to use it again.
+Cancel stops the downloader and its conversion process, or interrupts a USB copy/check between chunks. Keep the USB connected while stopping or preparing it for removal. Songs already copied remain; an unfinished copy created by this operation is removed. Local download files are retained. Cancel and the window close button stop an active transfer, wait for cleanup, then ask Windows to prepare the dedicated USB for removal. DOWNLOAD MORE and DONE appear together only after all songs are copied and verified. DOWNLOAD MORE clears the search field for another search while keeping the same USB connected and retaining the download list. DONE still hides the window immediately and completes safe removal in the background. After successful removal following Cancel, reconnect the USB to use it again.
 
 USB transfers first write a uniquely named `.youtubetousb-*.partial` file directly on the selected drive. The app flushes and closes it, checks its SHA-256 against the source, and only then publishes the final MP3 name without replacing existing files. Cancellation closes and flushes the current write before removing only this operation's temporary file. The USB-copy worker is never forcibly killed. On Windows the final move requests write-through; this does not replace Windows' safe-removal mechanism.
 
