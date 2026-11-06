@@ -18,6 +18,25 @@ def player_errors(output):
     return re.sub(r'\x1b\[[0-?]*[ -/]*[@-~]|\x9b[0-?]*[ -/]*[@-~]', '', output).strip()
 
 
+def failure_reason(error, playback):
+    """Diagnostics without including signed URLs, cookies, or HTTP headers."""
+    text = player_errors(error).lower()
+    for words, reason in [
+        (('certificate', 'tls', 'ssl'), 'Secure media connection failed.'),
+        (('403', 'forbidden'), 'YouTube refused the audio request (403).'),
+        (('429', 'too many requests'), 'YouTube rate-limited the audio request.'),
+        (('sign in', 'not a bot'), 'YouTube requires sign-in on this connection.'),
+        (('requested format', 'no video formats'), 'YouTube supplied no playable audio format.'),
+        (('audio device', 'audio open', 'audio subsystem'), 'The audio device could not be opened.'),
+        (('option not found', 'unrecognized option'), 'The player does not support an audio option.'),
+        (('timed out', 'timeout'), 'The audio connection timed out.'),
+        (('failed to open', 'invalid data'), 'The player could not open the audio stream.'),
+    ]:
+        if any(word in text for word in words):
+            return reason
+    return 'Audio playback failed.' if playback else 'Audio link resolution failed.'
+
+
 def run_process(command, cancel, stop_process, timeout, reject_stderr=False):
     if cancel.is_set():
         raise PreviewCancelled()
@@ -54,7 +73,7 @@ def run_process(command, cancel, stop_process, timeout, reject_stderr=False):
             raise PreviewCancelled()
         if process.returncode or (reject_stderr and player_errors(error)):
             # Do not expose signed media URLs or network headers in the UI/log.
-            raise RuntimeError('Preview unavailable. Please try another song.')
+            raise RuntimeError('Preview unavailable. ' + failure_reason(error, reject_stderr))
         return output
 
 

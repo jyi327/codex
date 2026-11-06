@@ -1334,8 +1334,8 @@ if __name__ == '__main__':
             preview.play(results[0]['url'], downloader_command(), player, threading.Event(), stop_process_tree,
                          lambda state: None, seconds=2)
             report.write_text('Live audio preview succeeded: streamed a YouTube audio sample through a dummy audio device.\n', encoding='utf-8')
-        except Exception:
-            report.write_text('Live audio preview could not be verified on this network.\n', encoding='utf-8')
+        except Exception as error:
+            report.write_text('Live audio preview could not be verified: ' + str(error) + '\n', encoding='utf-8')
             sys.exit(1)
         sys.exit(0)
     root = ctk.CTk()

@@ -110,7 +110,8 @@ if (-not $previewStream.WaitForExit(90000)) {
 if ((Test-Path $previewStreamReport) -and (Get-Content $previewStreamReport -Raw).StartsWith('Live audio preview succeeded:')) {
     Write-Host '::notice title=Live audio preview::Packaged app streamed a YouTube audio sample through a dummy audio device.'
 } else {
-    Write-Host '::warning title=Live audio preview::Live audio preview could not be verified on this network. See PreviewCheck.txt.'
+    $previewReason = if (Test-Path $previewStreamReport) { (Get-Content $previewStreamReport -Raw).Trim() } else { 'No live preview report was produced.' }
+    Write-Host "::warning title=Live audio preview::$previewReason"
 }
 $startupReport | Out-File dist\YouTubeToUSB\StartupTiming.txt -Encoding utf8
 Compress-Archive -Path dist\YouTubeToUSB -DestinationPath dist\YouTubeToUSB-Windows-x64.zip -Force
