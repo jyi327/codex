@@ -332,7 +332,10 @@ class WorkflowTests(unittest.TestCase):
             self.assertFalse(instance.close_when_done)
             self.assertIn('cleanup could not finish', instance.progress_label.cget('text'))
         finally:
-            root.destroy()
+            if 'instance' in locals():
+                instance.destroy_window()
+            else:
+                root.destroy()
 
     @unittest.skipUnless(app.sys.platform == 'win32' or os.environ.get('DISPLAY'), 'GUI requires Windows or a display')
     def test_song_selection_enables_start_and_done_stays_hidden_until_complete(self):
@@ -354,22 +357,26 @@ class WorkflowTests(unittest.TestCase):
             instance.show_done(False)
             self.assertEqual(instance.complete_frame.winfo_manager(), '')
         finally:
-            root.destroy()
+            if 'instance' in locals():
+                instance.destroy_window()
+            else:
+                root.destroy()
 
     @unittest.skipUnless(app.sys.platform == 'win32' or os.environ.get('DISPLAY'), 'GUI requires Windows or a display')
-    def test_new_search_clears_previous_selection_and_cancel_keeps_usb(self):
+    def test_new_search_keeps_download_list_and_cancel_keeps_usb(self):
         root = app.tk.Tk()
         root.withdraw()
         try:
             with patch.object(app, 'removable_drives', return_value=['E:\\']):
                 instance = app.App(root)
             instance.selected_url = 'https://www.youtube.com/watch?v=abcdefghijk'
+            instance.queue.add({'title': 'Previous song', 'url': instance.selected_url})
             instance.search_entry.insert(0, 'New song')
             with patch.object(app.threading, 'Thread') as worker:
                 instance.search_songs()
             worker.return_value.start.assert_called_once()
             self.assertTrue(instance.searching)
-            self.assertIsNone(instance.selected_url)
+            self.assertIn(instance.selected_url, instance.queue.items)
             self.assertEqual(instance.button.cget('state'), 'disabled')
             self.assertEqual(instance.search_button.cget('state'), 'disabled')
             instance.cancel()
@@ -379,8 +386,12 @@ class WorkflowTests(unittest.TestCase):
             self.assertFalse(instance.searching)
             self.assertEqual(instance.drive.get(), 'E:\\')
             self.assertEqual(instance.search_button.cget('state'), 'normal')
+            self.assertEqual(len(instance.queue.items), 1)
         finally:
-            root.destroy()
+            if 'instance' in locals():
+                instance.destroy_window()
+            else:
+                root.destroy()
 
     @unittest.skipUnless(app.sys.platform == 'win32' or os.environ.get('DISPLAY'), 'GUI requires Windows or a display')
     def test_next_song_clears_search_and_keeps_usb_connected(self):
@@ -409,11 +420,14 @@ class WorkflowTests(unittest.TestCase):
             self.assertFalse(instance.download_complete)
             self.assertEqual(instance.action_frame.winfo_manager(), 'pack')
             self.assertEqual(instance.complete_frame.winfo_manager(), '')
-            self.assertEqual(instance.progress_label.cget('text'), 'Ready')
+            self.assertEqual(instance.progress_label.cget('text'), 'Search for another song.')
             self.assertEqual(instance.percent_label.cget('text'), '0%')
             self.assertEqual(instance.button.cget('state'), 'disabled')
         finally:
-            root.destroy()
+            if 'instance' in locals():
+                instance.destroy_window()
+            else:
+                root.destroy()
 
     def test_usb_filename_removes_only_video_id(self):
         self.assertEqual(app.clean_usb_filename('My Song [Tm3gvy-qpks].mp3'), 'MySong.mp3')
@@ -456,7 +470,10 @@ class WorkflowTests(unittest.TestCase):
             self.assertEqual(instance.button.cget('state'), 'disabled')
             self.assertEqual(instance.drive.get(), '')
         finally:
-            root.destroy()
+            if 'instance' in locals():
+                instance.destroy_window()
+            else:
+                root.destroy()
 
     def test_copy_percentage_finishes_after_verification(self):
         updates = []

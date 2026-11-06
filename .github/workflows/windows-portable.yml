@@ -6,6 +6,8 @@ on:
       - app.py
       - windows_usb.py
       - youtube_search.py
+      - download_queue.py
+      - thumbnails.py
       - requirements-ui.txt
       - build-windows.ps1
       - tests/**

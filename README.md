@@ -1,6 +1,6 @@
 # YouTube to USB MP3
 
-Windows desktop app for finding a YouTube song, converting its audio to 192 kbps MP3, and copying it directly into a flash drive’s root folder. Type a song name or artist, click SEARCH, select a result, and click START. The paste-link option is removed. Local downloads are retained, USB filenames have no spaces or trailing video IDs, and copies are verified with SHA-256. Existing files are never overwritten.
+Windows desktop app for finding a YouTube song, converting its audio to 192 kbps MP3, and copying it directly into a flash drive’s root folder. Type a song name or artist, click SEARCH, tick one or more results, review the Download list on the right, and click START. The paste-link option is removed. Local downloads are retained, USB filenames have no spaces or trailing video IDs, and copies are verified with SHA-256. Existing files are never overwritten.
 
 ## Previous-version video guide
 
@@ -8,7 +8,7 @@ Windows desktop app for finding a YouTube song, converting its audio to 192 kbps
 
 ## Portable Windows app (no installation)
 
-Download `YouTubeToUSB-Windows-x64.zip` from a successful GitHub Actions **Build portable Windows app** run. Extract the entire ZIP, open its `YouTubeToUSB` folder, and double-click `YouTubeToUSB.exe`. Python, FFmpeg, Node.js, and yt-dlp are bundled: no administrator access, installer, or separate runtime installation is required. Keep the `_internal` folder beside the EXE. Enter a song name or artist, click **SEARCH**, select a result, then click **START**. Up to five results show the title, channel, and duration. A single connected USB drive is selected automatically; with multiple drives, choose the destination first. START requires both a selected song and connected destination. MP3s go directly into the drive root; no Music subfolder is created.
+Download `YouTubeToUSB-Windows-x64.zip` from a successful GitHub Actions **Build portable Windows app** run. Extract the entire ZIP, open its `YouTubeToUSB` folder, and double-click `YouTubeToUSB.exe`. Python, FFmpeg, Node.js, and yt-dlp are bundled: no administrator access, installer, or separate runtime installation is required. Keep the `_internal` folder beside the EXE. Enter a song name or artist, click **SEARCH**, select one or more results, then click **START**. Up to five results show the title, channel, and duration. A single connected USB drive is selected automatically; with multiple drives, choose the destination first. START requires queued songs and a connected destination. Songs are downloaded, converted, and copied one at a time. MP3s go directly into the drive root; no Music subfolder is created.
 
 This is a portable folder, not a single-file executable. It requires 64-bit Windows 10/11 and Internet access for YouTube. It stores downloaded audio in your local app-data folder. Windows may show a warning for the unsigned executable. Do not bypass organizational security policies. To update the downloader, download a newly built portable package.
 
@@ -36,7 +36,7 @@ Python 3.12+, Tkinter, FFmpeg/ffprobe, and the dependency in `requirements.txt` 
 
 The interface uses large text, high-contrast Start and Cancel buttons, and a compact links-and-drive layout. Search and selection replace the link box; technical messages stay under Details. The page scrolls on smaller screens. Alt+S starts and Escape cancels. USB drives are checked automatically every 1.5 seconds; START is disabled when no drive is connected.
 
-Cancel stops the downloader and its conversion process, or interrupts a USB copy/check between chunks. Keep the USB connected while stopping or preparing it for removal. Songs already copied remain; an unfinished copy created by this operation is removed. Local download files are retained. Cancel and the window close button stop an active transfer, wait for cleanup, then ask Windows to prepare the dedicated USB for removal. NEXT SONG and DONE appear together only after all songs are copied and verified. NEXT SONG clears the search and selection for another conversion while keeping the same USB connected. DONE still hides the window immediately and completes safe removal in the background. After successful removal following Cancel, reconnect the USB to use it again.
+Cancel stops the downloader and its conversion process, or interrupts a USB copy/check between chunks. Keep the USB connected while stopping or preparing it for removal. Songs already copied remain; an unfinished copy created by this operation is removed. Local download files are retained. Cancel and the window close button stop an active transfer, wait for cleanup, then ask Windows to prepare the dedicated USB for removal. NEXT SONG and DONE appear together only after all songs are copied and verified. NEXT SONG clears the search field for another search while keeping the same USB connected and retaining the download list. DONE still hides the window immediately and completes safe removal in the background. After successful removal following Cancel, reconnect the USB to use it again.
 
 USB transfers first write a uniquely named `.youtubetousb-*.partial` file directly on the selected drive. The app flushes and closes it, checks its SHA-256 against the source, and only then publishes the final MP3 name without replacing existing files. Cancellation closes and flushes the current write before removing only this operation's temporary file. The USB-copy worker is never forcibly killed. On Windows the final move requests write-through; this does not replace Windows' safe-removal mechanism.
 
@@ -56,6 +56,14 @@ The portable app bundles the official unpackaged downloader, avoiding repeated o
 
 ## In-app search
 
-Search uses the bundled downloader’s public YouTube search, without a YouTube API key or an embedded browser. It reads metadata only; no audio is downloaded until a result is selected and START is pressed. Live/upcoming streams and malformed results are excluded. Enter song names rather than links. Search has a time limit and can be cancelled; cancelling a read-only search does not remove the USB. Closing still requests safe removal. YouTube or local network restrictions can prevent search; errors appear under Details and the user can retry.
+Search uses the bundled downloader’s public YouTube search, without a YouTube API key or an embedded browser. It reads metadata only; no audio is downloaded until songs are selected and START is pressed. Live/upcoming streams and malformed results are excluded. Enter song names rather than links. Search has a time limit and can be cancelled; cancelling a read-only search does not remove the USB. Closing still requests safe removal. YouTube or local network restrictions can prevent search; errors appear under Details and the user can retry.
 
 The Windows build also runs a live search check and includes its result in SearchCheck.txt. This network-dependent check is reported separately from the offline conversion and startup checks.
+
+## Multi-song layout
+
+The main window uses two permanently visible columns: YouTube-style search results with thumbnails and duration badges on the left, and the ordered Download list on the right. There are no tabs or whole-page scrolling. Only the lists scroll; Details opens separately. The main controls were checked at 1000×560. Thumbnails load in the background and fall back to placeholders without blocking search or downloads.
+
+Tick songs across different searches to build one duplicate-free list. Click a checked result again or its × in the Download list to remove it. Before a job, CANCEL clears all selections and leaves results and the USB connected. During a job, CANCEL still stops safely and requests USB removal.
+
+Each song shows Waiting, Preparing, Downloading, Converting, Copying, Verifying, Done, Failed, or Stopped. Successful copies remain protected. Completion shows copied/failed counts; RETRY FAILED submits only failed songs and leaves successful songs alone. Selected items are retained across searches during this app session; they are not saved to disk for restoration after reopening.

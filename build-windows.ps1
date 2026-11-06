@@ -81,6 +81,9 @@ if (Test-Path $searchReport) {
     } else {
         Write-Host '::warning title=Live YouTube search::Live search could not be verified on this network. See SearchCheck.txt.'
     }
+    if ($searchText.Contains('Thumbnail download succeeded.')) {
+        Write-Host '::notice title=Video thumbnails::Packaged app downloaded and decoded a YouTube thumbnail.'
+    }
     if ($env:GITHUB_STEP_SUMMARY) { Get-Content $searchReport | Out-File $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8 }
 } else {
     throw 'Packaged search check did not produce a report'
