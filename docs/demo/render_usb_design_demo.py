@@ -15,24 +15,23 @@ steps=[
 ('usb','插入 USB。',5),
 ('folder','这里显示 USB 内找到的所有歌曲。',4),
 ('delete','删除歌曲，按 DELETE。',3.5),
-('confirm','按 DELETE 确认；按 CANCEL 保留。',4),
+('confirm','按 DELETE 确认删除。',4),
 ('search','输入想下载的歌名，按 SEARCH。',8),
 ('play','按 PLAY 播放歌曲。',3.5),
 ('stop','按 STOP 停止播放。',3),
 ('select','点击歌曲，加入下载列表。',4.5),
 ('remove','选错了，按 × 移除。',3.5),
-('clear','按 CANCEL，清空已选歌曲。',3.5),
-('reselect','重新选择想下载的歌曲。',3),
 ('search2','继续搜索其他歌曲，例如「选择」。',6),
 ('add2','点击歌曲，加入下载列表。',3.5),
 ('start','按 START 开始下载。',3.5),
 ('progress','等待完成，先不要拔出 USB。',5),
-('activecancel','需要中途停止，可按 CANCEL。',3.5),
 ('failed','下载失败，按 RETRY FAILED。',4),
 ('retry','等待完成。',3.5),
-('complete','歌曲已存入 USB。',3),
-('more','还想下载？可按 DOWNLOAD MORE。',4),
-('done','完成后，按 DONE 关闭。',3.5),
+('complete','下载完成。可按 DONE 关闭程序。',4),
+('more','要继续下载，按 DOWNLOAD MORE。',4),
+('reselect','点击歌曲，加入新的下载列表。',3),
+('clear','不想下载了，按 CANCEL 清空选择。',3.5),
+('done','按 × 关闭程序。',3.5),
 ]
 timeline=[];at=0
 for key,subtitle,duration in steps:
@@ -112,7 +111,7 @@ PHASES={
  'remove':{'click':.46},'clear':{'click':.46},'reselect':{'click':.46},
  'search2':{'field_click':.12,'typing_start':.16,'typing_end':.45,'click':.88},
  'add2':{'click':.46},'start':{'click':.46},'progress':{'first_done':.96},
- 'failed':{'click':.58},'retry':{'completed':.86},'done':{'click':.52},
+ 'failed':{'click':.58},'retry':{'completed':.86},'more':{'click':.46},'done':{'click':.52},
 }
 EVENTS={key:{name:round(phase*DURATIONS[key]*FPS) for name,phase in values.items()} for key,values in PHASES.items()}
 EVENTS['open']['opened']=EVENTS['open']['click2']+4
@@ -127,7 +126,7 @@ CONTROLS={
  'result0':(LX+14,268,LX+LW-110,348),'result1':(LX+14,366,LX+LW-110,446),
  'remove1':(MX+MW-52,378,MX+MW-23,408),'cancel':(804,697,1492,744),
  'start':(LX,697,790,744),'retry':(1268,697,1492,744),
- 'more':(LX,697,790,744),'done':(804,697,1492,744),'progress':(LX,642,1492,683),
+ 'close':(1455,75,1495,101),'more':(LX,697,790,744),'done':(804,697,1492,744),'progress':(LX,642,1492,683),
  'usb_count':(UX+12,112,UX+210,154),
 }
 ACTIONS={
@@ -139,7 +138,7 @@ ACTIONS={
  'remove':[('click','remove1')],'clear':[('click','cancel')],'reselect':[('click','result0')],
  'search2':[('field_click','field'),('click','search_button')],
  'add2':[('click','result0')],'start':[('click','start')],'failed':[('click','retry')],
- 'done':[('click','done')],
+ 'more':[('click','more')],'done':[('click','close')],
 }
 
 def local_frame(key,p):return round(p*DURATIONS[key]*FPS)
@@ -186,7 +185,7 @@ def caption_plan(item):
  if key=='failed':return [(0,EVENTS[key]['click']+1,title,'retry'),(EVENTS[key]['click']+1,duration,'等待完成。','progress')]
  if key=='retry':return [(0,EVENTS[key]['completed'],'等待完成。','progress')]
  if plan:return [(0,plan[0][2]+1,title,plan[0][3])]
- control={'progress':'progress','activecancel':'cancel','complete':'usb_count','more':'more','folder':'usb_count'}[key]
+ control={'progress':'progress','activecancel':'cancel','complete':'done','more':'more','folder':'usb_count'}[key]
  return [(0,duration,title,control)]
 
 CAPTIONS={item['key']:caption_plan(item) for item in timeline}
@@ -251,6 +250,11 @@ def state(key,p):
  if key=='retry':
   S['busy']=not hit(key,p,'completed');S['percent']=min(100,35+int(65*frame/max(1,EVENTS[key]['completed'])));S['status']='Retrying song…'
  if i>=24 or (key=='retry' and hit(key,p,'completed')):S.update(completed=True,done=True,status='2 songs copied · 0 failed',percent=100)
+ if key=='more' and hit(key,p,'click') or key in ('reselect','clear','done'):
+  S.update(queue=[],completed=False,done=False,busy=False,failed=False,percent=0,
+           status='Ready to download',query='选择',results=[B+'｜林子祥、叶倩文',B+'｜经典对唱版'],library_copied=2)
+  if key=='reselect' and hit(key,p,'click'):S['queue']=[B]
+  if key=='clear' and not hit(key,p,'click'):S['queue']=[B]
  if not S['connected']:S['status']='No USB connected'
  return S
 
@@ -299,11 +303,12 @@ def check_synchronization():
  change('select','click_first','queue',[],[A])
  change('select','click_second','queue',[A],[A,BAD])
  change('remove','click','queue',[A,BAD],[A])
- change('clear','click','queue',[A],[])
- change('reselect','click','queue',[],[A])
+ change('clear','click','queue',[B],[])
+ change('reselect','click','queue',[],[B])
  change('add2','click','queue',[A],[A,B])
  change('start','click','busy',False,True)
  change('failed','click','busy',False,True)
+ change('more','click','done',True,False)
  change('done','click','opened',True,False)
  for key in ('search','search2'):
   change(key,'click','busy',False,True)
@@ -347,7 +352,7 @@ def render_app(im,S):
   targets[f'remove{j}']=(MX+MW-52,y+22,MX+MW-23,y+52);centered(d,targets[f'remove{j}'],'×',24,'#64748b')
  if not S['queue']:text(d,(MX+30,355),'Choose songs from the results.',14,'#7b8ba2')
  # Flat USB song list, including songs found in subfolders.
- copied=2 if S['completed'] else 1 if S['first_done'] else 0
+ copied=S.get('library_copied',2 if S['completed'] else 1 if S['first_done'] else 0)
  count=0 if not S['connected'] else 5-int(S['deleted'])+copied
  rr(d,(UX,108,UX+UW,571),'#ffffff','#ccdcf2');text(d,(UX+16,118),f'USB ({count})',24,bold=True)
  targets['count']=(UX+12,112,UX+195,154);targets['refresh']=(UX+UW-49,115,UX+UW-15,150)
