@@ -4,9 +4,9 @@ Windows desktop app for finding a YouTube song, converting its audio to 192 kbps
 
 ## Video guide
 
-[新版操作示范：87 秒，近距离字幕、重点放大，无配音](docs/YouTubeToUSB-USB-Design-Demo.mp4) · [字幕](docs/YouTubeToUSB-USB-Design-Demo.srt)
+[新版操作示范：87 秒，固定画面、近距离字幕，无配音](docs/YouTubeToUSB-USB-Design-Demo.mp4) · [字幕](docs/YouTubeToUSB-USB-Design-Demo.srt)
 
-这段视频只讲用户操作，包括文件夹、确认删除、搜索、PLAY/STOP、下载列表、START/CANCEL、RETRY FAILED、DOWNLOAD MORE 和 DONE。歌名逐字输入，留出阅读时间；字幕贴近操作位置，并以平滑缩放突出重点。新版 EXE 已实现 USB 面板和持续自动刷新；视频画面为模拟操作，等待时间已缩短。
+这段视频只讲用户操作，包括文件夹、确认删除、搜索、PLAY/STOP、下载列表、START/CANCEL、RETRY FAILED、DOWNLOAD MORE 和 DONE。歌名逐字输入，留出阅读时间；画面保持固定，不缩放、不平移；字幕贴近操作位置，以轻微边框提示点击位置。新版 EXE 已实现 USB 面板和持续自动刷新；视频画面为模拟操作，等待时间已缩短。
 
 **之前版本的操作示范（没有 USB 歌曲面板）：**
 

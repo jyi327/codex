@@ -220,7 +220,7 @@ def render_app(im,S):
 def cursor(im,xy,pulse=0,double=False):
  layer=Image.new('RGBA',im.size);d=ImageDraw.Draw(layer);x,y=xy
  if pulse:
-  r=10+24*pulse;d.ellipse((x-r,y-r,x+r,y+r),outline=(251,180,44,int(240*(1-pulse))),width=4)
+  r=8+12*pulse;d.ellipse((x-r,y-r,x+r,y+r),outline=(251,180,44,int(240*(1-pulse))),width=4)
   if double:d.ellipse((x-r-8,y-r-8,x+r+8,y+r+8),outline=(251,180,44,int(180*(1-pulse))),width=3)
  d.polygon([(x,y),(x+2,y+30),(x+11,y+23),(x+19,y+37),(x+25,y+33),(x+18,y+19),(x+31,y+16)],fill='white',outline='#15263f',width=2)
  im.paste(Image.alpha_composite(im.convert('RGBA'),layer).convert('RGB'))
@@ -228,7 +228,6 @@ def centerbox(box):return ((box[0]+box[2])/2,(box[1]+box[3])/2)
 
 enc=subprocess.Popen(['ffmpeg','-hide_banner','-loglevel','error','-y','-f','rawvideo','-pix_fmt','rgb24','-s',f'{W}x{H}','-r',str(FPS),'-i','pipe:0','-an','-c:v','libx264','-preset','fast','-crf','20','-threads','2','-pix_fmt','yuv420p','-movflags','+faststart','-metadata','title=YouTubeToUSB 操作示范（中文字幕，无配音）',str(OUT/(NAME+'.mp4'))],stdin=subprocess.PIPE)
 last=(144,155)
-camera=[1.0,W/2,H/2]
 try:
  for n in range(math.ceil(DURATION*FPS)):
   t=n/FPS;item=next((s for s in timeline if s['start']<=t<s['start']+s['duration']),timeline[-1]);p=(t-item['start'])/item['duration'];current_key=item['key'];S=state(current_key,p)
@@ -248,10 +247,12 @@ try:
   if current_key=='done':click_times=[.52]
   if current_key in ('search','search2'):click_times=[.12,.88]
   if current_key=='select':click_times=[.30,.78]
+  if not click_times and current_key not in ('activecancel','failed','more'):
+   dest=last
   begin=last
-  move=p/.20
+  move=p/(.10 if current_key in ('search','search2') else .20)
   if current_key in ('search','search2') and p>=.77:
-   begin=centerbox(targets['search']);move=(p-.77)/.08
+   begin=centerbox(targets['search']);move=(p-.77)/.10
   if current_key=='select' and p>=.60:
    begin=centerbox(targets['result0']);move=(p-.60)/.12
   q=max(0,min(1,move));q=q*q*(3-2*q);xy=(begin[0]+(dest[0]-begin[0])*q,begin[1]+(dest[1]-begin[1])*q)
@@ -260,27 +261,14 @@ try:
    x,y,x2,y2=box;ImageDraw.Draw(im).rounded_rectangle((x-4,y-4,x2+4,y2+4),radius=11,outline='#f0aa2e',width=3)
   cursor(im,xy,pulse,current_key=='open')
   if p>.94:last=xy
-  # Smoothly follow the relevant control; return to a wider view between sections.
-  desired_zoom={'open':1.0,'usb':1.0,'folder':1.65,'delete':1.70,'confirm':1.45,
-   'search':1.45,'search2':1.45,'play':1.55,'stop':1.55,'select':1.40,'remove':1.65,
-   'clear':1.45,'reselect':1.40,'add2':1.40,'start':1.45,'progress':1.0,
-   'activecancel':1.45,'failed':1.30,'retry':1.30,'complete':1.0,'more':1.35,'done':1.35}[current_key]
-  if not S['opened']:desired_zoom=1.0
-  desired_center=dest if desired_zoom>1 else (W/2,H/2)
-  alpha=1-math.exp(-1/(FPS*.30))
-  camera[0]+=(desired_zoom-camera[0])*alpha
-  camera[1]+=(desired_center[0]-camera[1])*alpha
-  camera[2]+=(desired_center[1]-camera[2])*alpha
-  zoom,cx,cy=camera;cw,ch=W/zoom,H/zoom
-  cx=max(cw/2,min(W-cw/2,cx));cy=max(ch/2,min(H-ch/2,cy))
-  left,top=cx-cw/2,cy-ch/2
-  im=im.transform((W,H),Image.Transform.EXTENT,(left,top,left+cw,top+ch),Image.Resampling.BICUBIC)
-  focus=((box[0]-left)*zoom,(box[1]-top)*zoom,(box[2]-left)*zoom,(box[3]-top)*zoom)
+  # Keep a fixed full-window view: no camera zoom, panning, or moving crop.
+  focus=box
   d=ImageDraw.Draw(im)
   # Keep the short instruction close to the action without covering its control.
   caption_width=min(1480,max(270,fonts[(28,False)].getlength(item['subtitle'])+48))
   focus_x=max(30,min(W-30,(focus[0]+focus[2])/2))
-  cap_left=max(16,min(W-16-caption_width,focus_x-caption_width/2))
+  caption_x=(LX+1040)/2 if current_key in ('search','search2') else focus_x
+  cap_left=max(16,min(W-16-caption_width,caption_x-caption_width/2))
   cap_top=focus[1]-86
   below=cap_top<64
   if below:cap_top=focus[3]+25
