@@ -1,5 +1,6 @@
 """Read visible audio trees and delete only a confirmed, unchanged audio file."""
 from dataclasses import dataclass
+from functools import lru_cache
 import os
 from pathlib import Path
 import stat
@@ -84,15 +85,15 @@ def scan(root, cancel=None):
                         pending.append((Path(item.path), child))
                     elif stat.S_ISREG(info.st_mode) and Path(item.name).suffix.lower() in AUDIO_EXTENSIONS:
                         if sys.platform == 'win32':
-                            # DirEntry.stat() supplies zero file/volume IDs on Windows.
-                            # Get complete metadata for the later confirmed-deletion check.
+                            # Use the same native API here and at deletion time. Python
+                            # path-stat and fd-stat metadata can differ on Windows.
                             try:
-                                info = Path(item.path).lstat()
+                                file_id = windows_file_identity(Path(item.path))
                             except OSError:
                                 continue
-                            if excluded(item.name, info) or not stat.S_ISREG(info.st_mode):
-                                continue
-                        contents[relative].append(Entry(child, Path(item.name).stem, file_id=fingerprint(info)))
+                        else:
+                            file_id = fingerprint(info)
+                        contents[relative].append(Entry(child, Path(item.name).stem, file_id=file_id))
         except OSError:
             if not relative:
                 raise
@@ -143,7 +144,11 @@ def delete_song(snapshot, entry, cancel=None):
         if excluded(component, info) or not stat.S_ISDIR(info.st_mode):
             raise OSError('The song folder has changed. Refresh USB and try again.')
     target = parent / entry.relative[-1]
-    validate_file(target.lstat(), entry)
+    current = target.lstat()
+    if excluded(entry.relative[-1], current) or not stat.S_ISREG(current.st_mode):
+        raise OSError('This song has changed. Refresh USB and try again.')
+    if sys.platform != 'win32':
+        validate_file(current, entry)
     check_cancel(cancel)
     if sys.platform == 'win32':
         _delete_windows(snapshot, entry, target, cancel)
@@ -172,7 +177,6 @@ def _delete_windows(snapshot, entry, target, cancel):
     # Delete by a verified file handle, rather than reopening a possibly replaced path.
     import ctypes
     from ctypes import wintypes
-    import msvcrt
     kernel = ctypes.WinDLL('kernel32', use_last_error=True)
     create = kernel.CreateFileW
     create.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, wintypes.LPVOID,
@@ -184,10 +188,12 @@ def _delete_windows(snapshot, entry, target, cancel):
     handle = create(str(target), 0x10000 | 0x80, 0x1 | 0x2, None, 3, 0x200000, None)
     if handle == wintypes.HANDLE(-1).value:
         raise ctypes.WinError(ctypes.get_last_error())
-    descriptor = None
     try:
-        descriptor = msvcrt.open_osfhandle(handle, os.O_RDONLY | os.O_BINARY)
-        validate_file(os.fstat(descriptor), entry)
+        observed = windows_file_identity(handle=handle)
+        if observed != entry.file_id:
+            error = OSError('This song has changed. Refresh USB and try again.')
+            error.add_note(f'Expected native identity={entry.file_id}; observed={observed}')
+            raise error
         final_path = kernel.GetFinalPathNameByHandleW
         final_path.argtypes = [wintypes.HANDLE, wintypes.LPWSTR, wintypes.DWORD, wintypes.DWORD]
         final_path.restype = wintypes.DWORD
@@ -210,10 +216,57 @@ def _delete_windows(snapshot, entry, target, cancel):
         if not mark(handle, 4, ctypes.byref(disposition), ctypes.sizeof(disposition)):
             raise ctypes.WinError(ctypes.get_last_error())
     finally:
-        if descriptor is not None:
-            os.close(descriptor)
-        else:
-            close(handle)
+        close(handle)
+
+
+def windows_file_identity(path=None, *, handle=None):
+    """Read consistent file IDs/times through GetFileInformationByHandle only."""
+    import ctypes
+    from ctypes import wintypes
+    kernel, Information = _windows_file_api()
+    owned = handle is None
+    if owned:
+        create = kernel.CreateFileW
+        create.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, wintypes.LPVOID,
+                           wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE]
+        create.restype = wintypes.HANDLE
+        handle = create(str(path), 0x80, 0x1 | 0x2 | 0x4, None, 3, 0x200000, None)
+        if handle == wintypes.HANDLE(-1).value:
+            raise ctypes.WinError(ctypes.get_last_error())
+    query = kernel.GetFileInformationByHandle
+    try:
+        info = Information()
+        if not query(handle, ctypes.byref(info)):
+            raise ctypes.WinError(ctypes.get_last_error())
+        if info.attributes & (0x2 | 0x4 | 0x10 | 0x400):
+            raise OSError('This song has changed. Refresh USB and try again.')
+        combine = lambda high, low: (int(high) << 32) | int(low)
+        return ('win32', int(info.volume), combine(info.index_high, info.index_low),
+                combine(info.size_high, info.size_low),
+                combine(info.written.dwHighDateTime, info.written.dwLowDateTime),
+                combine(info.created.dwHighDateTime, info.created.dwLowDateTime))
+    finally:
+        if owned:
+            kernel.CloseHandle(handle)
+
+
+@lru_cache(maxsize=1)
+def _windows_file_api():
+    import ctypes
+    from ctypes import wintypes
+    kernel = ctypes.WinDLL('kernel32', use_last_error=True)
+    class Information(ctypes.Structure):
+        _fields_ = [('attributes', wintypes.DWORD), ('created', wintypes.FILETIME),
+                    ('accessed', wintypes.FILETIME), ('written', wintypes.FILETIME),
+                    ('volume', wintypes.DWORD), ('size_high', wintypes.DWORD),
+                    ('size_low', wintypes.DWORD), ('links', wintypes.DWORD),
+                    ('index_high', wintypes.DWORD), ('index_low', wintypes.DWORD)]
+    query = kernel.GetFileInformationByHandle
+    query.argtypes = [wintypes.HANDLE, ctypes.POINTER(Information)]
+    query.restype = wintypes.BOOL
+    kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+    kernel.CloseHandle.restype = wintypes.BOOL
+    return kernel, Information
 
 
 def smoke_test():

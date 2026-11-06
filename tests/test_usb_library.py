@@ -46,7 +46,7 @@ class USBLibraryTests(unittest.TestCase):
             self.assertTrue(library.excluded('Song.mp3', info))
         self.assertFalse(library.excluded('Song.mp3', SimpleNamespace(st_mode=stat.S_IFREG, st_file_attributes=0x20)))
 
-    def test_windows_scan_uses_full_file_identity_instead_of_lightweight_directory_metadata(self):
+    def test_windows_scan_uses_native_identity_instead_of_python_stat_metadata(self):
         path = self.write('Song.mp3')
         actual = path.lstat()
         lightweight = SimpleNamespace(st_mode=actual.st_mode, st_dev=0, st_ino=0, st_size=actual.st_size,
@@ -54,9 +54,11 @@ class USBLibraryTests(unittest.TestCase):
         item = SimpleNamespace(name='Song.mp3', path=str(path), stat=lambda **kwargs: lightweight)
         stream = MagicMock()
         stream.__enter__.return_value = [item]
-        with patch.object(library.sys, 'platform', 'win32'), patch.object(library, 'identity', return_value=('root', 'volume')), patch.object(library.os, 'scandir', return_value=stream):
+        native = ('win32', 123, 456, 5, 100, 50)
+        with patch.object(library.sys, 'platform', 'win32'), patch.object(library, 'identity', return_value=('root', 'volume')), patch.object(library.os, 'scandir', return_value=stream), patch.object(library, 'windows_file_identity', return_value=native) as read_identity:
             snapshot = library.scan(self.root)
-        self.assertEqual(snapshot.entries[0].file_id, library.fingerprint(actual))
+        self.assertEqual(snapshot.entries[0].file_id, native)
+        read_identity.assert_called_once_with(path)
 
     @unittest.skipUnless(os.name == 'nt', 'Windows file attributes')
     def test_real_windows_hidden_files_and_folders_are_omitted(self):
@@ -131,6 +133,15 @@ class USBLibraryTests(unittest.TestCase):
             with self.assertRaises(OSError):
                 library.delete_song(snapshot, snapshot.entries[0])
             self.assertTrue(path.exists())
+
+    @unittest.skipUnless(os.name == 'nt', 'Native Windows identity')
+    def test_native_deletion_is_independent_of_python_fd_stat(self):
+        path = self.write('song.mp3')
+        snapshot = library.scan(self.root)
+        self.assertEqual(snapshot.entries[0].file_id[0], 'win32')
+        with patch.object(library.os, 'fstat', side_effect=OSError('Unreliable fd metadata')):
+            library.delete_song(snapshot, snapshot.entries[0])
+        self.assertFalse(path.exists())
 
     def test_replacement_drive_is_not_deleted(self):
         path = self.write('song.mp3')

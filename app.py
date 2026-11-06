@@ -842,6 +842,8 @@ class App:
             self.events.put({'usb_delete_result': 'cancelled'})
         except Exception as error:
             self.log_detail(f'USB song deletion failed ({type(error).__name__}): {error}')
+            for note in getattr(error, '__notes__', ()):
+                self.log_detail('USB deletion detail: ' + note)
             self.events.put({'usb_delete_result': 'error', 'usb_delete_error': str(error),
                              'usb_delete_code': getattr(error, 'winerror', None) or getattr(error, 'errno', None)})
         else:
