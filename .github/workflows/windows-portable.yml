@@ -46,7 +46,9 @@ jobs:
           }
           python -m unittest discover -s tests -t . -v 2>&1 | Tee-Object -FilePath test-results.txt
           if ($LASTEXITCODE -ne 0) {
-            $testError = (Get-Content test-results.txt -Tail 45) -join '%0A'
+            $testError = Get-Content test-results.txt -Raw
+            $testError = $testError.Substring([Math]::Max(0, $testError.Length - 3500))
+            $testError = $testError.Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
             Write-Host "::error title=Windows tests::$testError"
             exit $LASTEXITCODE
           }
