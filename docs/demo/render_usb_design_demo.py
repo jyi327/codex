@@ -13,7 +13,7 @@ fonts={(s,b):ImageFont.truetype(BOLD if b else FONT,s) for s in (13,14,15,16,17,
 steps=[
 ('open','双击桌面的 YouTubeToUSB.exe。',3.5),
 ('usb','插入 USB。',5),
-('folder','点击文件夹，查看歌曲。',4),
+('folder','这里显示 USB 内找到的所有歌曲。',4),
 ('delete','删除歌曲，按 DELETE。',3.5),
 ('confirm','按 DELETE 确认；按 CANCEL 保留。',4),
 ('search','输入想下载的歌名，按 SEARCH。',8),
