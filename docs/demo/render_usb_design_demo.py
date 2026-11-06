@@ -220,7 +220,7 @@ def cursor(im,xy,pulse=0,double=False):
  im.paste(Image.alpha_composite(im.convert('RGBA'),layer).convert('RGB'))
 def centerbox(box):return ((box[0]+box[2])/2,(box[1]+box[3])/2)
 
-enc=subprocess.Popen(['ffmpeg','-hide_banner','-loglevel','error','-y','-f','rawvideo','-pix_fmt','rgb24','-s',f'{W}x{H}','-r',str(FPS),'-i','pipe:0','-an','-c:v','libx264','-preset','fast','-crf','20','-threads','2','-pix_fmt','yuv420p','-movflags','+faststart','-metadata','title=YouTubeToUSB USB面板设计演示（中文字幕，无配音）',str(OUT/(NAME+'.mp4'))],stdin=subprocess.PIPE)
+enc=subprocess.Popen(['ffmpeg','-hide_banner','-loglevel','error','-y','-f','rawvideo','-pix_fmt','rgb24','-s',f'{W}x{H}','-r',str(FPS),'-i','pipe:0','-an','-c:v','libx264','-preset','fast','-crf','20','-threads','2','-pix_fmt','yuv420p','-movflags','+faststart','-metadata','title=YouTubeToUSB 操作示范（中文字幕，无配音）',str(OUT/(NAME+'.mp4'))],stdin=subprocess.PIPE)
 last=(144,155)
 try:
  for n in range(math.ceil(DURATION*FPS)):
@@ -241,7 +241,7 @@ try:
   cursor(im,xy,pulse,current_key=='open')
   if p>.93:last=xy
   d=ImageDraw.Draw(im)
-  rr(d,(950,39,1528,68),'#f1f6ff',r=8);text(d,(965,42),'设计演示 · USB 面板待实现 · 等待已缩短',18,'#536780')
+  rr(d,(950,39,1528,68),'#f1f6ff',r=8);text(d,(965,42),'模拟操作 · 等待已缩短',18,'#536780')
   # Keep instructions above the laptop, without covering any app controls.
   frame=Image.new('RGB',(W,H),'#e7edf6')
   frame.paste(im.resize((1536,960),Image.Resampling.LANCZOS),(32,84))
@@ -254,4 +254,4 @@ try:
  if enc.wait():raise RuntimeError('Video encoding failed')
 finally:
  if enc.poll() is None:enc.kill()
-print('Finished',DURATION,'seconds; silent design demonstration.',flush=True)
+print('Finished',DURATION,'seconds; silent walkthrough.',flush=True)

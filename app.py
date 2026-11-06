@@ -1,7 +1,7 @@
 """Windows YouTube audio downloader and verified USB copier."""
 import ctypes
 from collections import deque, OrderedDict
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, CancelledError as FutureCancelled
 import hashlib
 import os
 from pathlib import Path
@@ -23,6 +23,7 @@ import windows_usb
 import youtube_search
 import thumbnails
 import preview
+import usb_library
 from download_queue import DownloadQueue
 import customtkinter as ctk
 
@@ -511,6 +512,18 @@ class App:
         self.preview_cancel = threading.Event()
         self.preview_thread = None
         self.preview_state = None
+        self.usb_library_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix='usb-library')
+        self.usb_scan_cancel = threading.Event()
+        self.usb_scan_future = None
+        self.usb_scan_generation = 0
+        self.usb_library_path = ''
+        self.usb_snapshot = None
+        self.usb_expanded = set()
+        self.usb_delete_buttons = []
+        self.usb_folder_buttons = {}
+        self.deleting_usb = False
+        self.usb_library_closed = False
+        self.usb_removal_identity = None
         self.queue = DownloadQueue()
         self.queue_widgets = {}
         self.thumbnail_cache = OrderedDict()
@@ -526,17 +539,18 @@ class App:
         ctk.set_appearance_mode('light')
         root.title('YouTube to MP3')
         scale = getattr(root, '_get_window_scaling', lambda: 1.0)()
-        width = min(1200, max(760, int(root.winfo_screenwidth() / scale) - 40))
+        width = min(1500, max(760, int(root.winfo_screenwidth() / scale) - 40))
         height = min(760, max(420, int(root.winfo_screenheight() / scale) - 80))
         root.geometry(f'{width}x{height}')
         root.minsize(min(900, width), min(540, height))
         root.configure(bg='#eff5ff')
         self.page = ctk.CTkFrame(root, fg_color='#eff5ff', corner_radius=0)
         self.page.pack(fill='both', expand=True)
-        self.page.grid_columnconfigure(0, weight=1)
+        for column, weight in enumerate((42, 26, 32)):
+            self.page.grid_columnconfigure(column, weight=weight, uniform='workspace')
         self.page.grid_rowconfigure(1, weight=1)
         header = ctk.CTkFrame(self.page, fg_color='transparent')
-        header.grid(row=0, column=0, sticky='ew', padx=20, pady=(14, 0))
+        header.grid(row=0, column=0, columnspan=2, sticky='ew', padx=(20, 10), pady=(14, 0))
         ctk.CTkLabel(header, text='Find a song', font=(interface_font, 22, 'bold'), text_color='#17253b', anchor='w').pack(fill='x', pady=(0, 6))
         search_row = ctk.CTkFrame(header, fg_color='transparent')
         search_row.pack(fill='x')
@@ -548,9 +562,9 @@ class App:
                                           font=(interface_font, 17, 'bold'), fg_color='#2563eb', hover_color='#1d4ed8', command=self.search_songs)
         self.search_button.pack(side='right')
         body = ctk.CTkFrame(self.page, fg_color='transparent')
-        body.grid(row=1, column=0, sticky='nsew', padx=20, pady=(10, 0))
-        body.grid_columnconfigure(0, weight=6, uniform='panels')
-        body.grid_columnconfigure(1, weight=4, uniform='panels')
+        body.grid(row=1, column=0, columnspan=2, sticky='nsew', padx=(20, 10), pady=(10, 0))
+        body.grid_columnconfigure(0, weight=42, uniform='panels')
+        body.grid_columnconfigure(1, weight=26, uniform='panels')
         body.grid_rowconfigure(0, weight=1)
         left = ctk.CTkFrame(body, fg_color='transparent')
         left.grid(row=0, column=0, sticky='nsew', padx=(0, 10))
@@ -562,16 +576,31 @@ class App:
         ctk.CTkLabel(left, text='Search results', font=(interface_font, 18, 'bold'), text_color='#17253b', anchor='w').grid(row=0, column=0, sticky='ew', pady=(0, 6))
         self.queue_heading = ctk.CTkLabel(right, text='Download list (0)', font=(interface_font, 18, 'bold'), text_color='#17253b', anchor='w')
         self.queue_heading.grid(row=0, column=0, sticky='ew', pady=(0, 6))
-        self.result_frame = ctk.CTkScrollableFrame(left, height=1, corner_radius=16, fg_color='white', border_width=1, border_color='#d4e2f6')
+        self.result_frame = ctk.CTkScrollableFrame(left, width=1, height=1, corner_radius=16, fg_color='white', border_width=1, border_color='#d4e2f6')
         self.result_frame.grid(row=1, column=0, sticky='nsew')
         self.result_frame.grid_columnconfigure(0, weight=1)
-        self.queue_frame = ctk.CTkScrollableFrame(right, height=1, corner_radius=16, fg_color='white', border_width=1, border_color='#d4e2f6')
+        self.queue_frame = ctk.CTkScrollableFrame(right, width=1, height=1, corner_radius=16, fg_color='white', border_width=1, border_color='#d4e2f6')
         self.queue_frame.grid(row=1, column=0, sticky='nsew')
         self.queue_frame.grid_columnconfigure(0, weight=1)
+        self.usb_panel = ctk.CTkFrame(self.page, fg_color='white', corner_radius=16, border_width=1, border_color='#d4e2f6')
+        self.usb_panel.grid(row=0, column=2, rowspan=2, sticky='nsew', padx=(0, 20), pady=(14, 0))
+        self.usb_panel.grid_columnconfigure(0, weight=1)
+        self.usb_panel.grid_rowconfigure(1, weight=1)
+        usb_header = ctk.CTkFrame(self.usb_panel, fg_color='transparent')
+        usb_header.grid(row=0, column=0, sticky='ew', padx=12, pady=(8, 4))
+        self.usb_heading = ctk.CTkLabel(usb_header, text='USB (0)', font=(interface_font, 20, 'bold'), text_color='#17253b', anchor='w')
+        self.usb_heading.pack(side='left', fill='x', expand=True)
+        self.usb_refresh_button = ctk.CTkButton(usb_header, text='↻', width=34, height=34, corner_radius=9,
+            fg_color='transparent', hover_color='#e7f0ff', text_color='#2563eb',
+            font=('Segoe UI Symbol' if sys.platform == 'win32' else 'DejaVu Sans', 24), command=lambda: self.sync_usb_library(force=True))
+        self.usb_refresh_button.pack(side='right')
+        self.usb_frame = ctk.CTkScrollableFrame(self.usb_panel, width=1, height=1, corner_radius=12, fg_color='white')
+        self.usb_frame.grid(row=1, column=0, sticky='nsew', padx=5, pady=(0, 5))
+        self.usb_frame.grid_columnconfigure(0, weight=1)
         self.drive = USBSelector(self.page, self.drive_changed, interface_font, compact=True)
-        self.drive.grid(row=2, column=0, sticky='ew', padx=20, pady=(10, 0))
+        self.drive.grid(row=2, column=0, columnspan=3, sticky='ew', padx=20, pady=(10, 0))
         status = ctk.CTkFrame(self.page, fg_color='transparent')
-        status.grid(row=3, column=0, sticky='ew', padx=20, pady=(8, 6))
+        status.grid(row=3, column=0, columnspan=3, sticky='ew', padx=20, pady=(8, 6))
         progress_row = ctk.CTkFrame(status, fg_color='transparent')
         progress_row.pack(fill='x')
         self.progress_label = ctk.CTkLabel(progress_row, text='Search for a song.', font=(interface_font, 17, 'bold'), text_color='#17253b', anchor='w', height=28)
@@ -582,7 +611,7 @@ class App:
         self.progress_bar.set(0)
         self.progress_bar.pack(fill='x', pady=(5, 0))
         footer = ctk.CTkFrame(self.page, fg_color='transparent')
-        footer.grid(row=4, column=0, sticky='ew', padx=20, pady=(4, 0))
+        footer.grid(row=4, column=0, columnspan=3, sticky='ew', padx=20, pady=(4, 0))
         footer.grid_columnconfigure(0, weight=1)
         self.button_area = ctk.CTkFrame(footer, fg_color='transparent')
         self.button_area.grid(row=0, column=0, sticky='ew')
@@ -600,11 +629,12 @@ class App:
         self.retry_button = ctk.CTkButton(footer, text='RETRY FAILED', height=50, width=160, corner_radius=14, font=(interface_font, 15, 'bold'), command=lambda: self.start(retry_failed=True))
         self.details_visible = tk.BooleanVar(value=False)
         self.details_check = ctk.CTkButton(self.page, text='Details', font=(interface_font, 13), text_color='#64748b', fg_color='transparent', hover_color='#e2ecfb', width=80, height=24, anchor='w', command=self.toggle_details)
-        self.details_check.grid(row=5, column=0, sticky='w', padx=20, pady=(0, 2))
+        self.details_check.grid(row=5, column=0, columnspan=3, sticky='w', padx=20, pady=(0, 2))
         self.details_frame = ctk.CTkFrame(root)
         self.log = ctk.CTkTextbox(self.details_frame, state='disabled', wrap='word', font=(interface_font, 13))
         self.render_results('Search for a song to begin.')
         self.render_queue()
+        self.render_usb_library('No USB connected')
         root.protocol('WM_DELETE_WINDOW', self.close)
         root.bind('<Alt-s>', lambda event: self.start() if not self.busy else None)
         root.bind('<Escape>', lambda event: self.cancel())
@@ -627,6 +657,11 @@ class App:
 
     def destroy_window(self):
         self.stop_preview()
+        self.stop_usb_scans()
+        self.usb_library_closed = True
+        library_pool = getattr(self, 'usb_library_pool', None)
+        if library_pool is not None:
+            library_pool.shutdown(wait=False, cancel_futures=True)
         pool = getattr(self, 'thumbnail_pool', None)
         if pool is not None:
             pool.shutdown(wait=False, cancel_futures=True)
@@ -643,6 +678,7 @@ class App:
         elif browse:
             self.browse()
         self.update_start_state()
+        self.sync_usb_library()
 
     def update_start_state(self):
         if not hasattr(self, 'button'):
@@ -662,7 +698,165 @@ class App:
     def monitor_drives(self):
         if not self.busy and not self.ejecting:
             self.refresh_drives()
+        self.sync_usb_library()
         self.root.after(1500, self.monitor_drives)
+
+    def stop_usb_scans(self):
+        cancel = getattr(self, 'usb_scan_cancel', None)
+        if cancel is not None:
+            cancel.set()
+        self.usb_scan_generation = getattr(self, 'usb_scan_generation', 0) + 1
+        future = getattr(self, 'usb_scan_future', None)
+        if future is not None:
+            future.cancel()
+        return future
+
+    def sync_usb_library(self, force=False):
+        if not hasattr(self, 'usb_frame') or self.usb_library_closed or self.ejecting or self.deleting_usb:
+            return
+        path = self.drive.get()
+        changed = path != self.usb_library_path
+        if changed:
+            self.stop_usb_scans()
+            self.usb_library_path = path
+            self.usb_snapshot = None
+            self.usb_expanded.clear()
+            self.render_usb_library('Reading USB…' if path else 'No USB connected')
+        if not path:
+            return
+        future = self.usb_scan_future
+        if not force and not changed and future is not None and not future.done():
+            return
+        self.stop_usb_scans()
+        self.usb_scan_cancel = threading.Event()
+        self.usb_scan_future = self.usb_library_pool.submit(self.scan_usb_worker,
+            self.usb_scan_generation, path, self.usb_scan_cancel)
+
+    def scan_usb_worker(self, generation, path, cancel):
+        try:
+            snapshot = usb_library.scan(path, cancel)
+        except usb_library.Cancelled:
+            return
+        except Exception:
+            self.events.put({'usb_library_generation': generation, 'usb_library_path': path,
+                             'usb_library_error': 'USB unavailable'})
+        else:
+            self.events.put({'usb_library_generation': generation, 'usb_library_path': path,
+                             'usb_library_snapshot': snapshot})
+
+    def apply_usb_library(self, event):
+        if (self.usb_library_closed or self.ejecting or event['usb_library_generation'] != self.usb_scan_generation
+                or event['usb_library_path'] != self.drive.get()):
+            return
+        snapshot = event.get('usb_library_snapshot')
+        if snapshot != self.usb_snapshot or 'usb_library_error' in event:
+            if self.usb_snapshot is not None and snapshot is not None and snapshot.identity != self.usb_snapshot.identity:
+                self.usb_expanded.clear()
+            self.usb_snapshot = snapshot
+            self.render_usb_library(event.get('usb_library_error', ''))
+
+    def render_usb_library(self, message=''):
+        canvas = self.usb_frame._parent_canvas
+        position = canvas.yview()[0]
+        for child in self.usb_frame.winfo_children():
+            child.destroy()
+        self.usb_delete_buttons = []
+        self.usb_folder_buttons = {}
+        snapshot = self.usb_snapshot
+        self.usb_heading.configure(text=f'USB ({snapshot.count if snapshot else 0})')
+        if snapshot is None or not snapshot.entries:
+            ctk.CTkLabel(self.usb_frame, text=message or 'No songs on USB', font=(self.interface_font, 15),
+                         text_color='#64748b', wraplength=180).grid(row=0, column=0, sticky='ew', pady=25)
+            return
+        row_number = 0
+        pending = [(entry, 0) for entry in reversed(snapshot.entries)]
+        while pending:
+            entry, depth = pending.pop()
+            row = ctk.CTkFrame(self.usb_frame, fg_color='white', corner_radius=9,
+                               border_width=1, border_color='#e8eef7')
+            row.grid(row=row_number, column=0, sticky='ew', padx=(min(depth * 14, 42) + 2, 2), pady=3)
+            row.grid_columnconfigure(0, weight=1)
+            if entry.is_folder:
+                expanded = entry.relative in self.usb_expanded
+                folder = ctk.CTkButton(row, text=('▾  ' if expanded else '▸  ') + f'{entry.name} ({entry.count})',
+                    height=38, anchor='w', corner_radius=8, fg_color='white', hover_color='#edf4ff', text_color='#263b57',
+                    font=(self.interface_font, 16, 'bold'), command=lambda e=entry: self.toggle_usb_folder(e.relative))
+                folder.grid(row=0, column=0, sticky='ew', padx=3, pady=2)
+                self.usb_folder_buttons[entry.relative] = folder
+                if expanded:
+                    pending.extend((child, depth + 1) for child in reversed(entry.children))
+            else:
+                title = ctk.CTkLabel(row, text=entry.name, anchor='w', justify='left', wraplength=180,
+                    text_color='#17253b', font=(self.interface_font, 15, 'bold'))
+                title.grid(row=0, column=0, sticky='ew', padx=(10, 4), pady=10)
+                delete = ctk.CTkButton(row, text='DELETE', width=76, height=32, corner_radius=8, border_width=1,
+                    fg_color='white', hover_color='#fff0f1', border_color='#ed9aa2', text_color='#c42c3a',
+                    font=(self.interface_font, 13, 'bold'), state='disabled' if self.busy or self.ejecting else 'normal',
+                    command=lambda s=snapshot, e=entry: self.delete_usb_song(s, e))
+                delete.grid(row=0, column=1, padx=(4, 8), pady=8)
+                self.usb_delete_buttons.append(delete)
+                row.bind('<Configure>', lambda event, label=title, card=row:
+                         label.configure(wraplength=max(40, int(event.width / card._get_widget_scaling()) - 108)))
+            row_number += 1
+        self.usb_frame.update_idletasks()
+        canvas.yview_moveto(position)
+
+    def toggle_usb_folder(self, relative):
+        if relative in self.usb_expanded:
+            self.usb_expanded.remove(relative)
+        else:
+            self.usb_expanded.add(relative)
+        self.render_usb_library()
+
+    def delete_usb_song(self, snapshot, entry):
+        if self.busy or self.ejecting or self.usb_library_closed or entry.is_folder:
+            return
+        if self.usb_snapshot is None or snapshot.identity != self.usb_snapshot.identity or snapshot.root != self.usb_snapshot.root:
+            self.sync_usb_library(force=True)
+            return
+        if not messagebox.askyesno('Delete song', f'Delete “{entry.name}” from USB?', parent=self.root, default='no', icon='warning'):
+            return
+        if (self.busy or self.ejecting or self.usb_library_closed or self.drive.get() != self.usb_library_path
+                or self.usb_snapshot is None or snapshot.root != self.usb_snapshot.root
+                or snapshot.identity != self.usb_snapshot.identity):
+            return
+        self.stop_preview()
+        self.stop_usb_scans()
+        self.last_destination = None
+        self.usb_device = None
+        self.usb_identity_error = None
+        self.usb_removal_identity = snapshot.identity if sys.platform == 'win32' else None
+        self.busy = True
+        self.deleting_usb = True
+        self.cancel_event.clear()
+        self.close_when_done = False
+        self.remove_when_stopped = False
+        self.set_controls(True)
+        self.show_progress('Deleting song…')
+        self.usb_library_pool.submit(self.delete_usb_worker, snapshot, entry, self.cancel_event)
+
+    def delete_usb_worker(self, snapshot, entry, cancel):
+        try:
+            usb_library.delete_song(snapshot, entry, cancel)
+        except usb_library.Cancelled:
+            self.events.put({'usb_delete_result': 'cancelled'})
+        except Exception:
+            self.events.put({'usb_delete_result': 'error'})
+        else:
+            self.events.put({'usb_delete_result': 'deleted'})
+
+    def finish_usb_delete(self, event):
+        self.busy = False
+        self.deleting_usb = False
+        self.set_controls(False)
+        if self.close_when_done:
+            self.prepare_exit()
+        elif self.remove_when_stopped:
+            self.prepare_exit(close_app=False)
+        else:
+            self.show_progress({'deleted': 'Song deleted', 'cancelled': 'Stopped',
+                'error': 'Could not delete this song. Refresh USB and try again.'}[event['usb_delete_result']], 0)
+            self.sync_usb_library(force=True)
 
     def search_songs(self):
         if self.busy or self.ejecting:
@@ -777,7 +971,7 @@ class App:
             row = ctk.CTkFrame(self.result_frame, corner_radius=12, border_width=1, border_color='#e5edf7', fg_color='white')
             row.grid(row=index, column=0, sticky='ew', padx=3, pady=4)
             row.grid_columnconfigure(1, weight=1)
-            thumbnail = self.make_thumbnail(row, result, (144, 81), self.result_thumbnail_slots)
+            thumbnail = self.make_thumbnail(row, result, (104, 60), self.result_thumbnail_slots)
             thumbnail.grid(row=0, column=0, rowspan=2, padx=(10, 12), pady=10)
             title = ctk.CTkLabel(row, text=result['title'], font=(self.interface_font, 16, 'bold'), text_color='#17253b', anchor='w', justify='left', wraplength=350)
             title.grid(row=0, column=1, sticky='ew', pady=(10, 0))
@@ -785,7 +979,7 @@ class App:
             subtitle.grid(row=1, column=1, sticky='ew', pady=(0, 10))
             check = ctk.CTkLabel(row, text='', width=30, font=(self.interface_font, 24, 'bold'), text_color='#2563eb')
             check.grid(row=0, column=2, padx=8, pady=(6, 0))
-            play_button = ctk.CTkButton(row, text='▶ PLAY', width=110, height=32, corner_radius=9,
+            play_button = ctk.CTkButton(row, text='▶ PLAY', width=90, height=32, corner_radius=9,
                                        font=(self.interface_font, 13, 'bold'), fg_color='#e7f0ff',
                                        hover_color='#d7e6ff', text_color='#1d4ed8',
                                        command=lambda i=index: self.preview_song(i))
@@ -794,7 +988,7 @@ class App:
             for target in (row, thumbnail, *thumbnail.winfo_children(), title, subtitle, check):
                 target.bind('<Button-1>', lambda event, i=index: self.select_song(i))
             def fit_title(event, label=title, channel=subtitle, card=row):
-                width = max(100, int(event.width / card._get_widget_scaling()) - 300)
+                width = max(55, int(event.width / card._get_widget_scaling()) - 248)
                 label.configure(wraplength=width)
                 channel.configure(wraplength=width)
             row.bind('<Configure>', fit_title)
@@ -893,7 +1087,7 @@ class App:
             row = ctk.CTkFrame(self.queue_frame, corner_radius=12, border_width=1, border_color='#e5edf7', fg_color='white')
             row.grid(row=index, column=0, sticky='ew', padx=3, pady=4)
             row.grid_columnconfigure(1, weight=1)
-            thumbnail = self.make_thumbnail(row, song, (72, 42), self.queue_thumbnail_slots)
+            thumbnail = self.make_thumbnail(row, song, (48, 32), self.queue_thumbnail_slots)
             thumbnail.grid(row=0, column=0, rowspan=2, padx=(8, 0), pady=10)
             title = ctk.CTkLabel(row, text=f'{index}. {song["title"]}', font=(self.interface_font, 15, 'bold'), text_color='#17253b', anchor='w', justify='left', wraplength=260)
             title.grid(row=0, column=1, sticky='ew', padx=(12, 0), pady=(10, 0))
@@ -901,7 +1095,7 @@ class App:
             state.grid(row=1, column=1, sticky='ew', padx=(12, 0), pady=(0, 10))
             remove = ctk.CTkButton(row, text='×', width=30, height=30, corner_radius=8, fg_color='transparent', hover_color='#e8f0fc', text_color='#526177', font=(self.interface_font, 22), command=lambda u=url: self.remove_song(u), state='disabled' if self.busy else 'normal')
             remove.grid(row=0, column=2, rowspan=2, padx=8)
-            row.bind('<Configure>', lambda event, label=title, card=row: label.configure(wraplength=max(100, int(event.width / card._get_widget_scaling())-150)))
+            row.bind('<Configure>', lambda event, label=title, card=row: label.configure(wraplength=max(55, int(event.width / card._get_widget_scaling())-126)))
             self.queue_widgets[url] = (state, remove)
         self.load_thumbnails()
 
@@ -941,6 +1135,8 @@ class App:
             label, remove = self.queue_widgets[url]
             percent = event.get('percent')
             label.configure(text=event['song_status'] + (f' {percent:.0f}%' if percent is not None and event['song_status'] not in ('Done','Failed') else ''), text_color='#137b60' if event['song_status']=='Done' else '#b42318' if event['song_status']=='Failed' else '#64748b')
+        if event['song_status'] == 'Done':
+            self.sync_usb_library(force=True)
 
     def show_done(self, complete):
         if complete:
@@ -983,6 +1179,10 @@ class App:
         self.next_button.configure(state='disabled' if busy else 'normal')
         self.update_start_state()
         self.refresh_preview_buttons()
+        for button in getattr(self, 'usb_delete_buttons', []):
+            button.configure(state='disabled' if busy or self.ejecting else 'normal')
+        if hasattr(self, 'usb_refresh_button'):
+            self.usb_refresh_button.configure(state='disabled' if self.ejecting or self.deleting_usb else 'normal')
 
     def cancel(self):
         self.stop_preview()
@@ -1000,7 +1200,8 @@ class App:
             self.remove_when_stopped = not self.searching
             self.cancel_event.set()
             self.cancel_button.configure(state='disabled')
-            self.show_progress('Stopping search…' if self.searching else 'Stopping… Please keep the USB plugged in.')
+            self.show_progress('Finishing… Please keep the USB plugged in.' if getattr(self, 'deleting_usb', False)
+                else 'Stopping search…' if self.searching else 'Stopping… Please keep the USB plugged in.')
 
     def close(self):
         self.stop_preview()
@@ -1016,6 +1217,9 @@ class App:
         self.stop_preview()
         if self.busy or self.ejecting:
             return
+        self.stop_usb_scans()
+        pool = getattr(self, 'usb_library_pool', None)
+        self.usb_scan_barrier = pool.submit(lambda: None) if pool is not None else None
         if close_app:
             self.root.withdraw()
         destination = self.last_destination or self.drive.get()
@@ -1034,6 +1238,12 @@ class App:
 
     def prepare_usb(self, destination):
         try:
+            barrier = getattr(self, 'usb_scan_barrier', None)
+            if barrier is not None:
+                try:
+                    barrier.result(timeout=5)
+                except FutureCancelled:
+                    pass
             if self.last_destination is not None:
                 if self.usb_identity_error:
                     raise self.usb_identity_error
@@ -1042,6 +1252,9 @@ class App:
                     raise OSError('The original drive could not be identified. Use Windows safe removal before unplugging.')
             else:
                 device = windows_usb.describe_usb(destination)
+                expected = getattr(self, 'usb_removal_identity', None)
+                if expected is not None and (device.root, device.volume_id) != expected:
+                    raise OSError('USB changed. No other device was ejected.')
             windows_usb.eject_usb(device)
         except Exception as error:
             self.events.put({'usb_error': str(error)})
@@ -1053,6 +1266,7 @@ class App:
         if folder:
             self.drive.set(folder)
             self.update_start_state()
+            self.sync_usb_library()
 
     def refresh_drives(self):
         drives = removable_drives()
@@ -1064,6 +1278,7 @@ class App:
         if not current or (current in previous and current not in drives):
             self.drive.set(drives[0] if len(drives) == 1 else '')
         self.update_start_state()
+        self.sync_usb_library()
 
     def start(self, retry_failed=False):
         if self.busy or self.ejecting:
@@ -1090,6 +1305,7 @@ class App:
             messagebox.showerror('Cannot start', str(error))
             return
         self.stop_preview()
+        self.usb_removal_identity = None
         self.busy = True
         self.download_complete = False
         self.remove_when_stopped = False
@@ -1236,7 +1452,11 @@ class App:
                     elif self.remove_when_stopped:
                         self.prepare_exit(close_app=False)
                 elif isinstance(event, dict):
-                    if 'preview_token' in event:
+                    if 'usb_library_generation' in event:
+                        self.apply_usb_library(event)
+                    elif 'usb_delete_result' in event:
+                        self.finish_usb_delete(event)
+                    elif 'preview_token' in event:
                         self.apply_preview_event(event)
                     elif 'thumbnail_id' in event:
                         self.apply_thumbnail(event)
@@ -1263,6 +1483,7 @@ class App:
                         self.usb_identity_error = None
                         self.remove_when_stopped = False
                         self.show_progress('Stopped. You can unplug your USB now.')
+                        self.sync_usb_library()
                     elif 'usb_error' in event:
                         # Missing or in-use USB: do not interrupt the user or claim safe removal.
                         self.progress_bar.stop()
@@ -1321,6 +1542,14 @@ if __name__ == '__main__':
             Path(sys.argv[sys.argv.index('--preview-test') + 1]).write_text(traceback.format_exc(), encoding='utf-8')
             sys.exit(1)
         sys.exit(0)
+    if '--usb-library-test' in sys.argv:
+        try:
+            usb_library.smoke_test()
+        except Exception:
+            import traceback
+            Path(sys.argv[sys.argv.index('--usb-library-test') + 1]).write_text(traceback.format_exc(), encoding='utf-8')
+            sys.exit(1)
+        sys.exit(0)
     if '--preview-stream-test' in sys.argv:
         report = Path(sys.argv[sys.argv.index('--preview-stream-test') + 1])
         try:
@@ -1339,8 +1568,8 @@ if __name__ == '__main__':
             sys.exit(1)
         sys.exit(0)
     root = ctk.CTk()
-    App(root)
+    interface = App(root)
     if '--smoke-test' in sys.argv:
         root.withdraw()
-        root.after(250, root.destroy)
+        root.after(250, interface.destroy_window)
     root.mainloop()

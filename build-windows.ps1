@@ -79,6 +79,18 @@ if ($previewCheck.ExitCode -ne 0) {
     throw "Bundled preview playback failed: $($previewCheck.ExitCode)"
 }
 Write-Host '::notice title=Audio preview::Bundled player decoded and played a test tone through a dummy audio device.'
+$libraryReport = Join-Path $PSScriptRoot 'build\usb-library-smoke-error.txt'
+Remove-Item $libraryReport -ErrorAction SilentlyContinue
+$libraryCheck = Start-Process -FilePath "$PSScriptRoot\dist\YouTubeToUSB\YouTubeToUSB.exe" -ArgumentList @('--usb-library-test', "`"$libraryReport`"") -PassThru
+if (-not $libraryCheck.WaitForExit(30000)) {
+    taskkill /PID $libraryCheck.Id /T /F | Out-Null
+    throw 'USB song browser self-test timed out'
+}
+if ($libraryCheck.ExitCode -ne 0) {
+    if (Test-Path $libraryReport) { Get-Content $libraryReport | Write-Host }
+    throw "USB song browser self-test failed: $($libraryCheck.ExitCode)"
+}
+Write-Host '::notice title=USB song browser::Packaged app scanned songs and deleted only the selected test file in its temporary folder.'
 $searchReport = Join-Path $PSScriptRoot 'dist\YouTubeToUSB\SearchCheck.txt'
 $searchCheck = Start-Process -FilePath "$PSScriptRoot\dist\YouTubeToUSB\YouTubeToUSB.exe" -ArgumentList @('--search-test', "`"$searchReport`"") -PassThru
 if (-not $searchCheck.WaitForExit(60000)) {

@@ -9,6 +9,7 @@ on:
       - download_queue.py
       - thumbnails.py
       - preview.py
+      - usb_library.py
       - requirements-ui.txt
       - build-windows.ps1
       - tests/**

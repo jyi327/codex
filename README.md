@@ -4,11 +4,11 @@ Windows desktop app for finding a YouTube song, converting its audio to 192 kbps
 
 ## Video guide
 
-[新版 USB 面板设计演示：60 秒，顶部中文字幕，无配音](docs/YouTubeToUSB-USB-Design-Demo.mp4) · [字幕](docs/YouTubeToUSB-USB-Design-Demo.srt)
+[新版操作示范：60 秒，顶部中文字幕，无配音](docs/YouTubeToUSB-USB-Design-Demo.mp4) · [字幕](docs/YouTubeToUSB-USB-Design-Demo.srt)
 
-这段视频是**设计演示**：只讲用户操作，包括文件夹、确认删除、搜索、PLAY/STOP、下载列表、START/CANCEL、RETRY FAILED、DOWNLOAD MORE 和 DONE；不讲解后台处理或 Details。USB 歌曲列表会随删除和下载更新。USB 面板及持续自动刷新尚未加入目前的 EXE。操作与等待为模拟，不会修改任何真实 USB 文件。
+这段视频只讲用户操作，包括文件夹、确认删除、搜索、PLAY/STOP、下载列表、START/CANCEL、RETRY FAILED、DOWNLOAD MORE 和 DONE。新版 EXE 已实现 USB 面板和持续自动刷新；视频画面为模拟操作，等待时间已缩短。
 
-**目前 EXE 的操作示范：**
+**之前版本的操作示范（没有 USB 歌曲面板）：**
 
 [观看 97 秒操作示范（无配音，中文字幕）](docs/YouTubeToUSB-Malaysia-Chinese-Demo.mp4) · [下载字幕](docs/YouTubeToUSB-Malaysia-Chinese-Demo.srt)
 
@@ -44,7 +44,7 @@ Python 3.12+, Tkinter, FFmpeg/ffprobe/ffplay, and the dependency in `requirement
 
 ## Easier controls and cancellation
 
-The interface uses large text, high-contrast Start and Cancel buttons, and a compact links-and-drive layout. Search and selection replace the link box; technical messages stay under Details. Only the song lists scroll; the main controls stay visible. Alt+S starts and Escape cancels. USB drives are checked automatically every 1.5 seconds; START is disabled when no drive is connected.
+The interface uses large text, high-contrast Start and Cancel buttons, and a wide three-column layout. Search and selection replace the link box; technical messages stay under Details. Only the song lists scroll; the main controls stay visible. Alt+S starts and Escape cancels. USB drives are checked automatically every 1.5 seconds; START is disabled when no drive is connected.
 
 Cancel stops the downloader and its conversion process, or interrupts a USB copy/check between chunks. Keep the USB connected while stopping or preparing it for removal. Songs already copied remain; an unfinished copy created by this operation is removed. Local download files are retained. Cancel and the window close button stop an active transfer, wait for cleanup, then ask Windows to prepare the dedicated USB for removal. DOWNLOAD MORE and DONE appear together only after all songs are copied and verified. DOWNLOAD MORE clears the search field for another search while keeping the same USB connected and retaining the download list. DONE still hides the window immediately and completes safe removal in the background. After successful removal following Cancel, reconnect the USB to use it again.
 
@@ -72,7 +72,7 @@ The Windows build also runs a live search check and includes its result in Searc
 
 ## Multi-song layout
 
-The main window uses two permanently visible columns: YouTube-style search results with thumbnails and duration badges on the left, and the ordered Download list on the right. There are no tabs or whole-page scrolling. Only the lists scroll; Details opens separately. The main controls were checked at 1000×560. Thumbnails load in the background and fall back to placeholders without blocking search or downloads.
+The main window uses three permanently visible columns: Search results, Download list, and USB. The search field and SEARCH button span only the first two columns. The USB panel extends up alongside them and shows the visible song count. There are no tabs or whole-page scrolling. Only the lists scroll; Details opens separately. The main controls were checked at 1000×560. Thumbnails load in the background and fall back to placeholders without blocking search or downloads.
 
 Tick songs across different searches to build one duplicate-free list. Click a checked result again or its × in the Download list to remove it. Before a job, CANCEL clears all selections and leaves results and the USB connected. During a job, CANCEL still stops safely and requests USB removal.
 
@@ -85,3 +85,13 @@ Each result has a separate PLAY button. It plays the full song through the bundl
 Searching again, DOWNLOAD MORE, START, CANCEL, DONE, and closing the app stop preview playback. Preview is disabled during a search, transfer, or USB removal. The player is bundled in the portable ZIP; source users need ffplay on PATH. Loading and playback run off the UI thread. Unavailable or restricted streams show a short error.
 
 The Windows build verifies bundled ffplay offline with a test tone and a dummy audio device. This checks the player and dependencies, not physical speakers or live YouTube media access.
+
+## USB song browser
+
+The USB panel scans the selected destination automatically, including subfolders containing visible audio files. It supports MP3, WAV, M4A, AAC, FLAC, OGG, OPUS, WMA, AIF/AIFF, APE, and ALAC. File extensions are hidden only in the display; filenames on disk are unchanged. Hidden/system files, dotfiles, empty song folders, and links or reparse points are omitted. The count includes songs in collapsed folders. Click a folder to expand or collapse it.
+
+The panel refreshes about every 1.5 seconds while connected, including during downloads, and immediately after each copied or deleted song. Outside changes are picked up on the next scan. Scanning runs on a background worker; unchanged results preserve the current view and folder expansion. Large or slow drives can take longer than one polling interval to scan. The refresh button requests a new scan. Stale results from another drive are discarded.
+
+DELETE asks for confirmation with No selected by default and removes only that song, never a folder. Deletion is disabled during search, download, and removal operations. Before deletion, the app rechecks the selected volume, location, and file identity and refuses changed files or replacement drives. Windows deletes using a verified file handle, preventing a path replacement from redirecting deletion. Deletion is permanent; it does not use the Recycle Bin. Closing or cancelling waits for deletion and scanner handles to close before requesting safe removal.
+
+The Windows package runs an offline USB-browser check in its own temporary folder: it scans nested songs and deletes only its selected test fixture. No build test deletes files from a physical USB.
