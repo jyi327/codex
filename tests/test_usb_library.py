@@ -5,7 +5,7 @@ import tempfile
 import threading
 from types import SimpleNamespace
 import unittest
-from unittest.mock import patch
+from unittest.mock import patch, MagicMock
 
 import usb_library as library
 
@@ -45,6 +45,18 @@ class USBLibraryTests(unittest.TestCase):
             info = SimpleNamespace(st_mode=stat.S_IFREG, st_file_attributes=attributes)
             self.assertTrue(library.excluded('Song.mp3', info))
         self.assertFalse(library.excluded('Song.mp3', SimpleNamespace(st_mode=stat.S_IFREG, st_file_attributes=0x20)))
+
+    def test_windows_scan_uses_full_file_identity_instead_of_lightweight_directory_metadata(self):
+        path = self.write('Song.mp3')
+        actual = path.lstat()
+        lightweight = SimpleNamespace(st_mode=actual.st_mode, st_dev=0, st_ino=0, st_size=actual.st_size,
+            st_mtime_ns=actual.st_mtime_ns, st_ctime_ns=actual.st_ctime_ns, st_file_attributes=0)
+        item = SimpleNamespace(name='Song.mp3', path=str(path), stat=lambda **kwargs: lightweight)
+        stream = MagicMock()
+        stream.__enter__.return_value = [item]
+        with patch.object(library.sys, 'platform', 'win32'), patch.object(library, 'identity', return_value=('root', 'volume')), patch.object(library.os, 'scandir', return_value=stream):
+            snapshot = library.scan(self.root)
+        self.assertEqual(snapshot.entries[0].file_id, library.fingerprint(actual))
 
     @unittest.skipUnless(os.name == 'nt', 'Windows file attributes')
     def test_real_windows_hidden_files_and_folders_are_omitted(self):

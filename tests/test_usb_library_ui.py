@@ -74,7 +74,7 @@ class USBLibraryUITests(unittest.TestCase):
         self.ui.drive.set(str(new))
         self.refresh()
         self.ui.apply_usb_library({'usb_library_generation': generation, 'usb_library_path': str(self.folder), 'usb_library_snapshot': old})
-        self.assertEqual(self.ui.usb_snapshot.root, new)
+        self.assertEqual(self.ui.usb_snapshot.root, new.resolve())
         self.assertEqual([e.name for e in self.ui.usb_snapshot.entries], ['Different'])
 
     def test_declining_confirmation_never_deletes(self):

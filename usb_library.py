@@ -83,6 +83,15 @@ def scan(root, cancel=None):
                     if stat.S_ISDIR(info.st_mode):
                         pending.append((Path(item.path), child))
                     elif stat.S_ISREG(info.st_mode) and Path(item.name).suffix.lower() in AUDIO_EXTENSIONS:
+                        if sys.platform == 'win32':
+                            # DirEntry.stat() supplies zero file/volume IDs on Windows.
+                            # Get complete metadata for the later confirmed-deletion check.
+                            try:
+                                info = Path(item.path).lstat()
+                            except OSError:
+                                continue
+                            if excluded(item.name, info) or not stat.S_ISREG(info.st_mode):
+                                continue
                         contents[relative].append(Entry(child, Path(item.name).stem, file_id=fingerprint(info)))
         except OSError:
             if not relative:
