@@ -12,7 +12,7 @@ BOLD='/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc'
 fonts={(s,b):ImageFont.truetype(BOLD if b else FONT,s) for s in (13,14,15,16,17,18,19,20,22,24,26,28,30) for b in (False,True)}
 steps=[
 ('open','双击桌面的 YouTubeToUSB.exe。',3.5),
-('usb','插入 USB。',3.5),
+('usb','插入 USB。',5),
 ('folder','点击文件夹，查看歌曲。',4),
 ('delete','删除歌曲，按 DELETE。',3.5),
 ('confirm','按 DELETE 确认；按 CANCEL 保留。',4),
@@ -27,11 +27,11 @@ steps=[
 ('add2','点击歌曲，加入下载列表。',3.5),
 ('start','按 START 开始下载。',3.5),
 ('progress','等待完成，先不要拔出 USB。',5),
-('activecancel','要中途停止，按 CANCEL。',3.5),
+('activecancel','需要中途停止，可按 CANCEL。',3.5),
 ('failed','下载失败，按 RETRY FAILED。',4),
 ('retry','等待完成。',3.5),
 ('complete','歌曲已存入 USB。',3),
-('more','继续下载，按 DOWNLOAD MORE。',4),
+('more','还想下载？可按 DOWNLOAD MORE。',4),
 ('done','完成后，按 DONE 关闭。',3.5),
 ]
 timeline=[];at=0
@@ -42,7 +42,7 @@ DURATION=at
 (OUT/'timeline.json').write_text(json.dumps(timeline,ensure_ascii=False,indent=2),encoding='utf-8')
 def stamp(t):
  ms=round(t*1000);return f'{ms//3600000:02}:{ms//60000%60:02}:{ms//1000%60:02},{ms%1000:03}'
-(OUT/(NAME+'.srt')).write_text('\n\n'.join(f'{i+1}\n{stamp(s["start"])} --> {stamp(s["start"]+s["duration"])}\n{s["subtitle"]}' for i,s in enumerate(timeline))+'\n',encoding='utf-8')
+
 
 def text(d,xy,s,size=18,color='#17253b',bold=False):d.text(xy,s,font=fonts[(size,bold)],fill=color)
 def rr(d,box,fill='#ffffff',outline=None,r=12,width=1):d.rounded_rectangle(box,radius=r,fill=fill,outline=outline,width=width)
@@ -100,41 +100,220 @@ A='可可托海的牧羊人';B='选择';BAD=A+'｜女声版'
 keys=['open','usb','count','filter','folder','refresh','delete','confirm','deleted','search','play','stop','select','remove','clear','reselect','search2','add2','start','progress','activecancel','details','failed','retry','complete','more','done']
 
 
+# All visible responses, click markers, motion and captions share these frame events.
+DURATIONS={item['key']:item['duration'] for item in timeline}
+PHASES={
+ 'open':{'click1':.30,'click2':.38},
+ 'usb':{'insert_begin':.16,'inserted':.46},
+ 'folder':{'click':.46},'delete':{'click':.46},'confirm':{'click':.55},
+ 'search':{'field_click':.12,'typing_start':.16,'typing_end':.60,'click':.88},
+ 'play':{'click':.46},'stop':{'click':.46},
+ 'select':{'click_first':.30,'click_second':.78},
+ 'remove':{'click':.46},'clear':{'click':.46},'reselect':{'click':.46},
+ 'search2':{'field_click':.12,'typing_start':.16,'typing_end':.45,'click':.88},
+ 'add2':{'click':.46},'start':{'click':.46},'progress':{'first_done':.96},
+ 'failed':{'click':.58},'retry':{'completed':.86},'done':{'click':.52},
+}
+EVENTS={key:{name:round(phase*DURATIONS[key]*FPS) for name,phase in values.items()} for key,values in PHASES.items()}
+EVENTS['open']['opened']=EVENTS['open']['click2']+4
+EVENTS['usb']['connected']=EVENTS['usb']['inserted']+10
+for key in ('search','search2'):
+ EVENTS[key]['results']=EVENTS[key]['click']+8
+CONTROLS={
+ 'icon':(116,127,172,183),'usb_insert':(866,924,891,951),
+ 'folder':(UX+15,331,UX+UW-15,371),'usb_delete':(UX+UW-111,279,UX+UW-19,313),
+ 'confirm_delete':(803,440,1055,489),'field':(LX,148,884,194),'search_button':(896,148,1040,194),
+ 'play_first':(LX+LW-104,308,LX+LW-25,340),
+ 'result0':(LX+14,268,LX+LW-110,348),'result1':(LX+14,366,LX+LW-110,446),
+ 'remove1':(MX+MW-52,378,MX+MW-23,408),'cancel':(804,697,1492,744),
+ 'start':(LX,697,790,744),'retry':(1268,697,1492,744),
+ 'more':(LX,697,790,744),'done':(804,697,1492,744),'progress':(LX,642,1492,683),
+ 'usb_count':(UX+12,112,UX+210,154),
+}
+ACTIONS={
+ 'open':[('click1','icon'),('click2','icon')],
+ 'folder':[('click','folder')],'delete':[('click','usb_delete')],'confirm':[('click','confirm_delete')],
+ 'search':[('field_click','field'),('click','search_button')],
+ 'play':[('click','play_first')],'stop':[('click','play_first')],
+ 'select':[('click_first','result0'),('click_second','result1')],
+ 'remove':[('click','remove1')],'clear':[('click','cancel')],'reselect':[('click','result0')],
+ 'search2':[('field_click','field'),('click','search_button')],
+ 'add2':[('click','result0')],'start':[('click','start')],'failed':[('click','retry')],
+ 'done':[('click','done')],
+}
+
+def local_frame(key,p):return round(p*DURATIONS[key]*FPS)
+def hit(key,p,event):return local_frame(key,p)>=EVENTS[key][event]
+def motion_plan(key):
+ result=[];previous=-3
+ for event,control in ACTIONS.get(key,[]):
+  click=EVENTS[key][event];arrival=click-3
+  begin=max(0,previous+2,arrival-18)
+  if key in ('search','search2') and event=='click':
+   begin=max(begin,EVENTS[key]['typing_end']+8)
+  result.append((begin,arrival,click,control));previous=click
+ return result
+
+def mouse_at(key,frame,origin):
+ point=origin
+ for begin,arrival,click,control in motion_plan(key):
+  if frame<begin:return point
+  target=((CONTROLS[control][0]+CONTROLS[control][2])/2,(CONTROLS[control][1]+CONTROLS[control][3])/2)
+  if frame<arrival:
+   q=(frame-begin)/max(1,arrival-begin);q=q*q*(3-2*q)
+   return point[0]+(target[0]-point[0])*q,point[1]+(target[1]-point[1])*q
+  point=target
+ if not ACTIONS.get(key) and key in ('activecancel','more'):
+  control='cancel' if key=='activecancel' else 'more';box=CONTROLS[control];target=((box[0]+box[2])/2,(box[1]+box[3])/2)
+  q=min(1,frame/20);q=q*q*(3-2*q);point=(origin[0]+(target[0]-origin[0])*q,origin[1]+(target[1]-origin[1])*q)
+ return point
+
+def pulse_at(key,frame):
+ for event,control in reversed(ACTIONS.get(key,[])):
+  elapsed=frame-EVENTS[key][event]
+  if 0<=elapsed<6:return elapsed/6
+ return None
+
+def caption_plan(item):
+ key=item['key'];duration=round(item['duration']*FPS);title=item['subtitle'];plan=motion_plan(key)
+ if key in ('search','search2'):
+  switch=plan[1][0]
+  return [(0,switch,'输入想下载的歌名。' if key=='search' else '输入下一首歌名，例如「选择」。','field'),
+          (switch,EVENTS[key]['click']+1,'按 SEARCH 搜索。','search_button')]
+ if key=='open':return [(0,EVENTS[key]['opened']+1,title,'icon')]
+ if key=='usb':return [(0,EVENTS[key]['connected']+1,title,'usb_insert')]
+ if key=='select':return [(0,plan[0][2]+1,title,'result0'),(plan[1][0],plan[1][2]+1,title,'result1')]
+ if key=='failed':return [(0,EVENTS[key]['click']+1,title,'retry'),(EVENTS[key]['click']+1,duration,'等待完成。','progress')]
+ if key=='retry':return [(0,EVENTS[key]['completed'],'等待完成。','progress')]
+ if plan:return [(0,plan[0][2]+1,title,plan[0][3])]
+ control={'progress':'progress','activecancel':'cancel','complete':'usb_count','more':'more'}[key]
+ return [(0,duration,title,control)]
+
+CAPTIONS={item['key']:caption_plan(item) for item in timeline}
+def caption_at(key,frame):
+ return next(((text,control) for begin,end,text,control in CAPTIONS[key] if begin<=frame<end),None)
+subtitles=[]
+for item in timeline:
+ item['events']=EVENTS.get(item['key'],{})
+ for begin,end,title,control in CAPTIONS[item['key']]:
+  subtitles.append((item['start']+begin/FPS,item['start']+end/FPS,title))
+(OUT/'timeline.json').write_text(json.dumps(timeline,ensure_ascii=False,indent=2),encoding='utf-8')
+(OUT/(NAME+'.srt')).write_text('\n\n'.join(f'{i+1}\n{stamp(begin)} --> {stamp(end)}\n{title}' for i,(begin,end,title) in enumerate(subtitles))+'\n',encoding='utf-8')
+
 def state(key,p):
- i=keys.index(key);S=dict(connected=i>1 or (i==1 and p>.35),deleted=i>7 or (i==7 and p>.65),expanded=key in ('folder','delete','confirm') and (key!='folder' or p>.46),query='',results=[],queue=[],playing=False,busy=False,done=False,failed=False,completed=False,percent=0,status='Ready to download',modal=None,opened=True)
- if key=='open':S['opened']=p>.52
- if key=='done':S['opened']=p<.62
+ i=keys.index(key);frame=local_frame(key,p)
+ S=dict(connected=i>1 or (key=='usb' and hit(key,p,'connected')),
+        deleted=i>7 or (key=='confirm' and hit(key,p,'click')),
+        expanded=key in ('folder','delete','confirm') and (key!='folder' or hit(key,p,'click')),
+        query='',results=[],queue=[],playing=False,busy=False,done=False,failed=False,completed=False,
+        percent=0,status='Ready to download',modal=None,opened=True,
+        first_done=i>=20 or (key=='progress' and hit(key,p,'first_done')))
+ if key=='open':S['opened']=hit(key,p,'opened')
+ if key=='done':S['opened']=not hit(key,p,'click')
  if i>=9:S['query']='可可拓海牧羊人';S['results']=[A,BAD,A+'｜纯音乐']
- if key=='search':
-  query='可可拓海牧羊人';count=int(max(0,min(1,(p-.14)/.46))*len(query))
-  S['query']=query[:count];S['typing']=.12<p<.77
-  if p<.96:S['results']=[]
- if key=='play':S['playing']=p>.46
- if key=='stop':S['playing']=p<.46
- if key=='select':S['queue']=[] if p<.30 else [A] if p<.78 else [A,BAD]
- if key=='remove':S['queue']=[A,BAD] if p<.45 else [A]
- if key=='clear':S['queue']=[A] if p<.45 else []
- if key=='reselect':S['queue']=[] if p<.46 else [A]
- if i>=16:S['queue']=[A]
- if i>=16:S['query']='选择';S['results']=[B+'｜林子祥、叶倩文',B+'｜经典对唱版']
- if key=='search2':
-  query='选择';count=int(max(0,min(1,(p-.14)/.31))*len(query))
-  S['query']=query[:count];S['typing']=.12<p<.77
-  if p<.88:S['results']=[A,BAD,A+'｜纯音乐']
-  elif p<.96:S['results']=[]
- if i>=18 or (key=='add2' and p>.45):S['queue']=[A,B]
- if key=='start':S['busy']=p>.45;S['status']='Preparing download' if p>.45 else 'Ready to download'
+ if key=='play':S['playing']=hit(key,p,'click')
+ if key=='stop':S['playing']=not hit(key,p,'click')
+ if key=='select':S['queue']=[A,BAD] if hit(key,p,'click_second') else [A] if hit(key,p,'click_first') else []
+ if key=='remove':S['queue']=[A] if hit(key,p,'click') else [A,BAD]
+ if key=='clear':S['queue']=[] if hit(key,p,'click') else [A]
+ if key=='reselect':S['queue']=[A] if hit(key,p,'click') else []
+ if i>=16:S['queue']=[A];S['query']='选择';S['results']=[B+'｜林子祥、叶倩文',B+'｜经典对唱版']
+ if key in ('search','search2'):
+  events=EVENTS[key];query='可可拓海牧羊人' if key=='search' else '选择'
+  begin,end=events['typing_start'],events['typing_end']
+  old='可可拓海牧羊人' if key=='search2' else ''
+  erase_end=begin+12 if old else begin
+  if frame<begin:S['query']=old
+  elif frame<erase_end:
+   remaining=max(0,len(old)-int((frame-begin+1)*len(old)/(erase_end-begin)))
+   S['query']=old[:remaining]
+  else:
+   count=max(0,min(len(query),int((frame-erase_end+1)*len(query)/max(1,end-erase_end+1))))
+   S['query']=query[:count]
+  S['typing']=hit(key,p,'field_click') and not hit(key,p,'click')
+  if not hit(key,p,'click'):
+   S['results']=[] if key=='search' else [A,BAD,A+'｜纯音乐']
+  elif not hit(key,p,'results'):
+   S['results']=[];S['busy']=True;S['status']='Searching…'
+  else:
+   S['results']=[A,BAD,A+'｜纯音乐'] if key=='search' else [B+'｜林子祥、叶倩文',B+'｜经典对唱版']
+ if i>=18 or (key=='add2' and hit(key,p,'click')):S['queue']=[A,B]
+ if key=='start':S['busy']=hit(key,p,'click');S['status']='Preparing download' if S['busy'] else 'Ready to download'
  if key in ('progress','activecancel','details'):
-  S['busy']=True;S['percent']=int(p*100) if key=='progress' else 45;S['status']='Downloading…' if p<.5 else 'Making MP3…' if p<.75 else 'Copying to USB…'
- if key=='details':S['modal']='details'
- if key=='confirm' and p<.65:S['modal']='delete'
- if key=='failed' or (key=='retry' and p<.49):S['failed']=True;S['status']='1 song copied · 1 failed';S['percent']=100
- if key=='retry' and p>=.49:
-  S['busy']=p<.86;S['percent']=min(100,int((p-.49)/.37*100));S['status']='Retrying song…'
- if i>=24 or (key=='retry' and p>=.86):S.update(completed=True,done=True,status='2 songs copied · 0 failed',percent=100)
+  S['busy']=True;S['percent']=min(100,int(p*100)) if key=='progress' else 45
+  S['status']='Downloading…' if p<.5 else 'Making MP3…' if p<.75 else 'Copying to USB…'
+ if key=='delete' and hit(key,p,'click'):S['modal']='delete'
+ if key=='confirm' and not hit(key,p,'click'):S['modal']='delete'
+ if key=='failed':
+  if not hit(key,p,'click'):S['failed']=True;S['status']='1 song copied · 1 failed';S['percent']=100
+  else:
+   S['busy']=True;S['percent']=int(35*(frame-EVENTS[key]['click'])/max(1,round(DURATIONS[key]*FPS)-EVENTS[key]['click']-1));S['status']='Retrying song…'
+ if key=='retry':
+  S['busy']=not hit(key,p,'completed');S['percent']=min(100,35+int(65*frame/max(1,EVENTS[key]['completed'])));S['status']='Retrying song…'
+ if i>=24 or (key=='retry' and hit(key,p,'completed')):S.update(completed=True,done=True,status='2 songs copied · 0 failed',percent=100)
  if not S['connected']:S['status']='No USB connected'
  return S
 
+
+def draw_usb_insertion(im,p):
+ frame=local_frame('usb',p);begin,end=EVENTS['usb']['insert_begin'],EVENTS['usb']['inserted']
+ q=max(0,min(1,(frame-begin)/max(1,end-begin)));q=q*q*(3-2*q)
+ d=ImageDraw.Draw(im)
+ rr(d,(390,863,1210,991),'#f7faff','#c7d7ed',r=18,width=2)
+ # A hand holds the blue flash drive and pushes its metal connector into the port.
+ right=690+154*q;left=right-128;y=925
+ d.ellipse((left-61,y+10,left+35,y+53),fill='#d8a17e')
+ rr(d,(left-37,y+1,left+37,y+20),'#e6b08d',r=9)
+ rr(d,(left,y,right,y+43),'#2563eb','#174ba7',r=9,width=2)
+ centered(d,(left+13,y+3,right-10,y+39),'USB',20,'white',True)
+ rr(d,(right-3,y+9,right+32,y+34),'#c3cdd9','#788ba2',r=3)
+ d.rectangle((right+7,y+14,right+14,y+20),fill='#53677e');d.rectangle((right+19,y+14,right+26,y+20),fill='#53677e')
+ rr(d,(878,913,1150,967),'#c7d1df','#8395ac',r=9,width=2)
+ d.line((890,919,1137,919),fill='#f8fbff',width=3)
+ rr(d,(866,925,889,950),'#61738a','#34485e',r=4,width=2)
+ d.rectangle((871,931,885,944),fill='#111f32')
+ if hit('usb',p,'inserted'):
+  d.line((868,924,868,951),fill='#52a96e',width=3)
+
+
+def check_synchronization():
+ origin=(144,155);checks=[]
+ for item in timeline:
+  key=item['key'];total=round(item['duration']*FPS)
+  for event,control in ACTIONS.get(key,[]):
+   frame=EVENTS[key][event];box=CONTROLS[control]
+   expected=((box[0]+box[2])/2,(box[1]+box[3])/2)
+   assert mouse_at(key,frame,origin)==expected,(key,event,'cursor not on control')
+   assert pulse_at(key,frame)==0,(key,event,'click marker starts late')
+   assert caption_at(key,frame) is not None,(key,event,'missing click instruction')
+   checks.append(dict(scene=key,event=event,frame=frame,time=item['start']+frame/FPS))
+  origin=mouse_at(key,total-1,origin)
+ def change(key,event,field,before,after):
+  frame=EVENTS[key][event];duration=DURATIONS[key]*FPS
+  assert state(key,(frame-1)/duration)[field]==before,(key,field,'early response')
+  assert state(key,frame/duration)[field]==after,(key,field,'late response')
+ change('folder','click','expanded',False,True)
+ change('delete','click','modal',None,'delete')
+ change('confirm','click','deleted',False,True)
+ change('play','click','playing',False,True)
+ change('stop','click','playing',True,False)
+ change('select','click_first','queue',[],[A])
+ change('select','click_second','queue',[A],[A,BAD])
+ change('remove','click','queue',[A,BAD],[A])
+ change('clear','click','queue',[A],[])
+ change('reselect','click','queue',[],[A])
+ change('add2','click','queue',[A],[A,B])
+ change('start','click','busy',False,True)
+ change('failed','click','busy',False,True)
+ change('done','click','opened',True,False)
+ for key in ('search','search2'):
+  change(key,'click','busy',False,True)
+  assert state(key,.4)['query'] not in ('','可可拓海牧羊人' if key=='search' else '选择')
+ assert EVENTS['usb']['connected']>EVENTS['usb']['inserted']
+ (OUT/'synchronization-checks.json').write_text(json.dumps(checks,ensure_ascii=False,indent=2),encoding='utf-8')
+ print('Verified',len(checks),'clicks: cursor arrival, marker and caption share each event frame.',flush=True)
+
+check_synchronization()
 
 def render_app(im,S):
  d=ImageDraw.Draw(im);targets={}
@@ -164,12 +343,12 @@ def render_app(im,S):
   y=264+j*92;rr(d,(MX+10,y,MX+MW-16,y+82),'white','#e1eaf7',9)
   thumb(d,(MX+20,y+15,MX+73,y+51),j)
   wrapped(d,(MX+84,y+9),title,212,16,True)
-  status='Done' if S['completed'] or ((S['failed'] or keys.index(current_key)>=20) and j==0) else 'Failed' if S['failed'] and j==1 else S['status'].replace('…','') if S['busy'] and j==(0 if keys.index(current_key)<=19 else 1) else 'Waiting'
+  status='Done' if S['completed'] or ((S['failed'] or S['first_done']) and j==0) else 'Failed' if S['failed'] and j==1 else S['status'].replace('…','') if S['busy'] and j==(0 if keys.index(current_key)<=19 else 1) else 'Waiting'
   text(d,(MX+84,y+54),status if len(status)<25 else 'Downloading',14,'#bd3544' if status=='Failed' else '#137b60' if status=='Done' else '#748299')
   targets[f'remove{j}']=(MX+MW-52,y+22,MX+MW-23,y+52);centered(d,targets[f'remove{j}'],'×',24,'#64748b')
  if not S['queue']:text(d,(MX+30,355),'Choose songs from the results.',14,'#7b8ba2')
  # Proposed USB browser: only visible audio files and nonempty song folders.
- copied=2 if S['completed'] else 1 if keys.index(current_key)>=20 else 0
+ copied=2 if S['completed'] else 1 if S['first_done'] else 0
  count=0 if not S['connected'] else 5-int(S['deleted'])+copied
  rr(d,(UX,108,UX+UW,571),'#ffffff','#ccdcf2');text(d,(UX+16,118),f'USB ({count})',24,bold=True)
  targets['count']=(UX+12,112,UX+195,154);targets['refresh']=(UX+UW-49,115,UX+UW-15,150)
@@ -217,9 +396,9 @@ def render_app(im,S):
  return targets
 
 
-def cursor(im,xy,pulse=0,double=False):
+def cursor(im,xy,pulse=None,double=False):
  layer=Image.new('RGBA',im.size);d=ImageDraw.Draw(layer);x,y=xy
- if pulse:
+ if pulse is not None:
   r=8+12*pulse;d.ellipse((x-r,y-r,x+r,y+r),outline=(251,180,44,int(240*(1-pulse))),width=4)
   if double:d.ellipse((x-r-8,y-r-8,x+r+8,y+r+8),outline=(251,180,44,int(180*(1-pulse))),width=3)
  d.polygon([(x,y),(x+2,y+30),(x+11,y+23),(x+19,y+37),(x+25,y+33),(x+18,y+19),(x+31,y+16)],fill='white',outline='#15263f',width=2)
@@ -227,58 +406,37 @@ def cursor(im,xy,pulse=0,double=False):
 def centerbox(box):return ((box[0]+box[2])/2,(box[1]+box[3])/2)
 
 enc=subprocess.Popen(['ffmpeg','-hide_banner','-loglevel','error','-y','-f','rawvideo','-pix_fmt','rgb24','-s',f'{W}x{H}','-r',str(FPS),'-i','pipe:0','-an','-c:v','libx264','-preset','fast','-crf','20','-threads','2','-pix_fmt','yuv420p','-movflags','+faststart','-metadata','title=YouTubeToUSB 操作示范（中文字幕，无配音）',str(OUT/(NAME+'.mp4'))],stdin=subprocess.PIPE)
-last=(144,155)
+last=(144,155);scene_key=None;scene_origin=last
 try:
  for n in range(math.ceil(DURATION*FPS)):
-  t=n/FPS;item=next((s for s in timeline if s['start']<=t<s['start']+s['duration']),timeline[-1]);p=(t-item['start'])/item['duration'];current_key=item['key'];S=state(current_key,p)
+  t=n/FPS;item=next((s for s in timeline if s['start']<=t<s['start']+s['duration']),timeline[-1]);p=(t-item['start'])/item['duration'];current_key=item['key'];frame=local_frame(current_key,p);S=state(current_key,p)
+  if scene_key!=current_key:scene_origin=last;scene_key=current_key
   im=BASE.copy();targets=render_app(im,S) if S['opened'] else {}
-  target={'folder':'folder','delete':'delete:朋友','confirm':'confirmdelete','search':'search' if p<.77 else 'searchbutton','play':'play0','stop':'play0','select':'result0' if p<.60 else 'result1','remove':'remove1','clear':'cancel','reselect':'result0','search2':'search' if p<.77 else 'searchbutton','add2':'result0','start':'start','activecancel':'cancel','failed':'retry','retry':'retry','more':'more','done':'done'}.get(current_key)
-  fixed={'remove':(MX+MW-52,378,MX+MW-23,408),'delete':(UX+UW-111,279,UX+UW-19,313),'confirm':(803,440,1055,489),'retry':(1268,697,1492,744),'done':(804,697,1492,744)}
-  box=targets.get(target,fixed.get(current_key,(700,420,900,480)))
-  if current_key in fixed:box=fixed[current_key]
-  if current_key=='open':box=(116,127,172,183)
-  if current_key=='usb':box=(LX,583,1492,634)
-  if current_key=='progress':box=(LX,642,1492,683)
-  if current_key=='complete':box=(UX+12,112,UX+210,154)
-  dest=centerbox(box)
-  click_times=[.46] if current_key in ('folder','delete','play','stop','remove','clear','reselect','add2','start','retry') else []
-  if current_key=='open':click_times=[.30,.38]
-  if current_key=='confirm':click_times=[.55]
-  if current_key=='done':click_times=[.52]
-  if current_key in ('search','search2'):click_times=[.12,.88]
-  if current_key=='select':click_times=[.30,.78]
-  if not click_times and current_key not in ('activecancel','failed','more'):
-   dest=last
-  begin=last
-  move=p/(.10 if current_key in ('search','search2') else .20)
-  if current_key in ('search','search2') and p>=.77:
-   begin=centerbox(targets['search']);move=(p-.77)/.10
-  if current_key=='select' and p>=.60:
-   begin=centerbox(targets['result0']);move=(p-.60)/.12
-  q=max(0,min(1,move));q=q*q*(3-2*q);xy=(begin[0]+(dest[0]-begin[0])*q,begin[1]+(dest[1]-begin[1])*q)
-  pulse=next(((p-click)/.18 for click in reversed(click_times) if 0<p-click<.18),0)
-  if S['opened'] and (p<.66 or current_key in ('activecancel','more','failed','search','search2','select')) and current_key not in ('usb','progress','complete'):
-   x,y,x2,y2=box;ImageDraw.Draw(im).rounded_rectangle((x-4,y-4,x2+4,y2+4),radius=11,outline='#f0aa2e',width=3)
-  cursor(im,xy,pulse,current_key=='open')
-  if p>.94:last=xy
-  # Keep a fixed full-window view: no camera zoom, panning, or moving crop.
-  focus=box
+  if current_key=='usb':draw_usb_insertion(im,p)
+  xy=mouse_at(current_key,frame,scene_origin);pulse=pulse_at(current_key,frame)
+  caption=caption_at(current_key,frame)
+  if caption:
+   title,control=caption;box=CONTROLS[control]
+   if S['opened'] and control not in ('usb_insert','progress','usb_count'):
+    x,y,x2,y2=box;ImageDraw.Draw(im).rounded_rectangle((x-4,y-4,x2+4,y2+4),radius=11,outline='#f0aa2e',width=3)
+  cursor(im,xy,pulse)
+  last=xy
   d=ImageDraw.Draw(im)
-  # Keep the short instruction close to the action without covering its control.
-  caption_width=min(1480,max(270,fonts[(28,False)].getlength(item['subtitle'])+48))
-  focus_x=max(30,min(W-30,(focus[0]+focus[2])/2))
-  caption_x=(LX+1040)/2 if current_key in ('search','search2') else focus_x
-  cap_left=max(16,min(W-16-caption_width,caption_x-caption_width/2))
-  cap_top=focus[1]-86
-  below=cap_top<64
-  if below:cap_top=focus[3]+25
-  cap_top=max(64,min(H-80,cap_top));cap_bottom=cap_top+60
-  anchor_x=max(cap_left+20,min(cap_left+caption_width-20,focus_x))
-  target_y=focus[3]+7 if below else focus[1]-7
-  if 42<target_y<H-10 and abs(target_y-(cap_top if below else cap_bottom))<200:
-   d.line((anchor_x,cap_top if below else cap_bottom,focus_x,target_y),fill='#e4a640',width=3)
-  rr(d,(cap_left,cap_top,cap_left+caption_width,cap_bottom),'#13233c','#56708e',r=13)
-  centered(d,(cap_left+12,cap_top+4,cap_left+caption_width-12,cap_bottom-4),item['subtitle'],28,'white')
+  if caption:
+   title,control=caption;focus=CONTROLS[control]
+   caption_width=min(1480,max(270,fonts[(28,False)].getlength(title)+48))
+   focus_x=max(30,min(W-30,(focus[0]+focus[2])/2))
+   caption_x=(LX+1040)/2 if current_key in ('search','search2') else focus_x
+   cap_left=max(16,min(W-16-caption_width,caption_x-caption_width/2))
+   cap_top=focus[1]-86;below=cap_top<64
+   if below:cap_top=focus[3]+25
+   cap_top=max(64,min(H-80,cap_top));cap_bottom=cap_top+60
+   anchor_x=max(cap_left+20,min(cap_left+caption_width-20,focus_x))
+   target_y=focus[3]+7 if below else focus[1]-7
+   if 42<target_y<H-10 and abs(target_y-(cap_top if below else cap_bottom))<200:
+    d.line((anchor_x,cap_top if below else cap_bottom,focus_x,target_y),fill='#e4a640',width=3)
+   rr(d,(cap_left,cap_top,cap_left+caption_width,cap_bottom),'#13233c','#56708e',r=13)
+   centered(d,(cap_left+12,cap_top+4,cap_left+caption_width-12,cap_bottom-4),title,28,'white')
   rr(d,(1290,9,1585,42),'#f1f6ff',r=7);text(d,(1303,12),'模拟操作 · 等待已缩短',16,'#536780')
   if current_key in ('folder','confirm','search','search2','play','select','remove','failed','complete','more') and .72<=p<.72+1/(FPS*item['duration']):im.save(OUT/f'preview-{current_key}.png')
   if n%200==0:print(f'{t:.0f}s / {DURATION:.0f}s',flush=True)
