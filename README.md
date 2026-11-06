@@ -4,9 +4,9 @@ Windows desktop app for finding a YouTube song, converting its audio to 192 kbps
 
 ## Video guide
 
-[观看 69 秒操作示范（无配音，中文字幕）](docs/YouTubeToUSB-Malaysia-Chinese-Demo.mp4) · [下载字幕](docs/YouTubeToUSB-Malaysia-Chinese-Demo.srt)
+[观看 64 秒操作示范（无配音，中文字幕）](docs/YouTubeToUSB-Malaysia-Chinese-Demo.mp4) · [下载字幕](docs/YouTubeToUSB-Malaysia-Chinese-Demo.srt)
 
-从电脑桌面打开程序，搜索「可可拓海牧羊人」，选择两首歌、移除一首，示范 CANCEL 清空选择，再下载歌曲并点击 DONE。仅显示中文字幕，无配音，不讲解安全移除 USB。画面采用当前程序界面，搜索结果和传输过程为模拟示范，等待时间已缩短。只连接一个 USB，无须选择磁盘。
+从电脑桌面打开程序，搜索想下载的歌曲，点击加入下载列表，示范移除选错的歌曲及 CANCEL 清空选择；再搜索「选择」并加入同一个列表，下载两首歌曲后点击 DONE。仅显示中文字幕，无配音，不讲解安全移除 USB。画面采用当前程序界面，搜索结果和传输过程为模拟示范，等待时间已缩短。只连接一个 USB，无须选择磁盘。
 
 旧版粘贴网址视频保留在 `docs/YouTubeToUSB-Mandarin-Guide.mp4`，不适用于当前搜索界面。
 
