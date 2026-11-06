@@ -6,13 +6,13 @@ Windows desktop app for finding a YouTube song, converting its audio to 192 kbps
 
 [观看 97 秒操作示范（无配音，中文字幕）](docs/YouTubeToUSB-Malaysia-Chinese-Demo.mp4) · [下载字幕](docs/YouTubeToUSB-Malaysia-Chinese-Demo.srt)
 
-从电脑桌面打开程序，搜索想下载的歌曲，示范 Preview 试听及 STOP 停止试听，再点击加入下载列表，示范移除选错的歌曲及 CANCEL 清空选择；再搜索「选择」并加入同一个列表，下载完成后点击 DOWNLOAD MORE 继续添加并下载新歌曲，最后点击 DONE。仅显示中文字幕，无配音，不讲解安全移除 USB。画面采用当前程序界面，搜索结果和传输过程为模拟示范，等待时间已缩短。只连接一个 USB，无须选择磁盘。
+从电脑桌面打开程序，搜索想下载的歌曲，示范 PLAY 试听及 STOP 停止试听，再点击加入下载列表，示范移除选错的歌曲及 CANCEL 清空选择；再搜索「选择」并加入同一个列表，下载完成后点击 DOWNLOAD MORE 继续添加并下载新歌曲，最后点击 DONE。仅显示中文字幕，无配音，不讲解安全移除 USB。画面采用当前程序界面，搜索结果和传输过程为模拟示范，等待时间已缩短。只连接一个 USB，无须选择磁盘。
 
 旧版粘贴网址视频保留在 `docs/YouTubeToUSB-Mandarin-Guide.mp4`，不适用于当前搜索界面。
 
 ## Portable Windows app (no installation)
 
-Download `YouTubeToUSB-Windows-x64.zip` from a successful GitHub Actions **Build portable Windows app** run. Extract the entire ZIP, open its `YouTubeToUSB` folder, and double-click `YouTubeToUSB.exe`. Python, FFmpeg, Node.js, and yt-dlp are bundled: no administrator access, installer, or separate runtime installation is required. Keep the `_internal` folder beside the EXE. Enter a song name or artist, click **SEARCH**, select one or more results, then click **START**. Up to five results show the title, channel, and duration. Click **▶ Preview** to hear a 30-second audio sample inside the app, or **■ STOP** to stop it. Preview does not select a song or save it to USB. A single connected USB drive is selected automatically; with multiple drives, choose the destination first. START requires queued songs and a connected destination. Songs are downloaded, converted, and copied one at a time. MP3s go directly into the drive root; no Music subfolder is created.
+Download `YouTubeToUSB-Windows-x64.zip` from a successful GitHub Actions **Build portable Windows app** run. Extract the entire ZIP, open its `YouTubeToUSB` folder, and double-click `YouTubeToUSB.exe`. Python, FFmpeg, Node.js, and yt-dlp are bundled: no administrator access, installer, or separate runtime installation is required. Keep the `_internal` folder beside the EXE. Enter a song name or artist, click **SEARCH**, select one or more results, then click **START**. Up to five results show the title, channel, and duration. Click **▶ PLAY** to hear a 30-second audio sample inside the app, or **■ STOP** to stop it. Preview does not select a song or save it to USB. A single connected USB drive is selected automatically; with multiple drives, choose the destination first. START requires queued songs and a connected destination. Songs are downloaded, converted, and copied one at a time. MP3s go directly into the drive root; no Music subfolder is created.
 
 This is a portable folder, not a single-file executable. It requires 64-bit Windows 10/11 and Internet access for YouTube. It stores downloaded audio in your local app-data folder. Windows may show a warning for the unsigned executable. Do not bypass organizational security policies. To update the downloader, download a newly built portable package.
 
@@ -74,7 +74,7 @@ Each song shows Waiting, Preparing, Downloading, Converting, Copying, Verifying,
 
 ## Song preview
 
-Each result has a separate Preview button. It plays up to 30 seconds of audio through the bundled ffplay player without opening a browser or saving files. Click the same button to stop; choosing another preview stops the previous one first. Song selection and the download list are independent of playback. Preview works without a connected USB.
+Each result has a separate PLAY button. It plays up to 30 seconds of audio through the bundled ffplay player without opening a browser or saving files. Click the same button to stop; choosing another preview stops the previous one first. Song selection and the download list are independent of playback. Preview works without a connected USB.
 
 Searching again, DOWNLOAD MORE, START, CANCEL, DONE, and closing the app stop preview playback. Preview is disabled during a search, transfer, or USB removal. The player is bundled in the portable ZIP; source users need ffplay on PATH. Loading and playback run off the UI thread. Unavailable or restricted streams show a short error.
 

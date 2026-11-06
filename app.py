@@ -785,7 +785,7 @@ class App:
             subtitle.grid(row=1, column=1, sticky='ew', pady=(0, 10))
             check = ctk.CTkLabel(row, text='', width=30, font=(self.interface_font, 24, 'bold'), text_color='#2563eb')
             check.grid(row=0, column=2, padx=8, pady=(6, 0))
-            play_button = ctk.CTkButton(row, text='▶ Preview', width=110, height=32, corner_radius=9,
+            play_button = ctk.CTkButton(row, text='▶ PLAY', width=110, height=32, corner_radius=9,
                                        font=(self.interface_font, 13, 'bold'), fg_color='#e7f0ff',
                                        hover_color='#d7e6ff', text_color='#1d4ed8',
                                        command=lambda i=index: self.preview_song(i))
@@ -806,7 +806,7 @@ class App:
     def refresh_preview_buttons(self):
         for url, button in getattr(self, 'preview_widgets', {}).items():
             active = url == self.preview_url
-            text = ('■ Loading…' if self.preview_state == 'loading' else '■ STOP') if active else '▶ Preview'
+            text = ('■ Loading…' if self.preview_state == 'loading' else '■ STOP') if active else '▶ PLAY'
             button.configure(text=text, state='disabled' if self.busy or self.ejecting else 'normal',
                              fg_color='#2563eb' if active else '#e7f0ff',
                              text_color='white' if active else '#1d4ed8')
