@@ -83,6 +83,13 @@ class PreviewTests(unittest.TestCase):
             preview.run_process([sys.executable, '-c', 'import sys;sys.stderr.write("Failed to open audio")'],
                                 threading.Event(), app.stop_process_tree, timeout=5, reject_stderr=True)
 
+    def test_windows_terminal_formatting_is_not_an_audio_error(self):
+        self.assertEqual(preview.player_errors(b'\x1b[2K\r\n'), '')
+        self.assertEqual(preview.player_errors('\x1b[31mFailed to open audio\x1b[0m\r'), 'Failed to open audio')
+        result = preview.run_process([sys.executable, '-c', 'import sys;sys.stderr.write("\\x1b[2K\\r")'],
+                                     threading.Event(), app.stop_process_tree, timeout=5, reject_stderr=True)
+        self.assertEqual(result, '')
+
     @unittest.skipUnless(shutil.which('ffplay'), 'ffplay is required for the offline player test')
     def test_real_player_opens_and_decodes_audio_without_a_sound_device(self):
         preview.smoke_test(shutil.which('ffplay'))

@@ -11,6 +11,13 @@ class PreviewCancelled(Exception):
     pass
 
 
+def player_errors(output):
+    if isinstance(output, bytes):
+        output = output.decode('utf-8', errors='replace')
+    # Windows ffplay can clear its terminal line even with loglevel=error.
+    return re.sub(r'\x1b\[[0-?]*[ -/]*[@-~]|\x9b[0-?]*[ -/]*[@-~]', '', output).strip()
+
+
 def run_process(command, cancel, stop_process, timeout, reject_stderr=False):
     if cancel.is_set():
         raise PreviewCancelled()
@@ -45,7 +52,7 @@ def run_process(command, cancel, stop_process, timeout, reject_stderr=False):
                     process.communicate(timeout=5)
         if cancel.is_set():
             raise PreviewCancelled()
-        if process.returncode or (reject_stderr and error.strip()):
+        if process.returncode or (reject_stderr and player_errors(error)):
             # Do not expose signed media URLs or network headers in the UI/log.
             raise RuntimeError('Preview unavailable. Please try another song.')
         return output
@@ -79,7 +86,7 @@ def play(song_url, downloader, player, cancel, stop_process, notify, seconds=30)
         raise PreviewCancelled()
     notify('playing')
     # ffplay streams directly to the sound device; the 30-second sample is not saved.
-    run_process([player, '-hide_banner', '-loglevel', 'error', '-nodisp', '-autoexit',
+    run_process([player, '-hide_banner', '-loglevel', 'error', '-nostats', '-nodisp', '-autoexit',
                  '-vn', '-volume', '70', '-rw_timeout', '10000000',
                  '-tls_verify', '1', '-headers', headers, '-i', url, '-t', str(seconds)],
                 cancel, stop_process, timeout=50, reject_stderr=True)
@@ -101,11 +108,11 @@ def smoke_test(player):
                                       for i in range(4000)))
         # SDL 2 and SDL 3 use different spellings for the audio-driver hint.
         environment = dict(os.environ, SDL_AUDIODRIVER='dummy', SDL_AUDIO_DRIVER='dummy')
-        result = subprocess.run([player, '-hide_banner', '-loglevel', 'error', '-nodisp', '-autoexit',
+        result = subprocess.run([player, '-hide_banner', '-loglevel', 'error', '-nostats', '-nodisp', '-autoexit',
                         '-vn', '-i', str(tone)], env=environment, check=True,
                        stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                        creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0), timeout=15)
-        if result.stderr.strip():
+        if player_errors(result.stderr):
             # This offline fixture contains no media URLs or authentication headers.
             raise RuntimeError('Preview player could not decode the test audio: ' +
-                               result.stderr.decode('utf-8', errors='replace').strip())
+                               player_errors(result.stderr))
