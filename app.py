@@ -846,7 +846,7 @@ class App:
         self.preview_thread.start()
 
     def preview_worker(self, token, url, downloader, player, cancel, previous):
-        # Wait off the UI thread so two samples can never overlap, even on rapid clicks.
+        # Wait off the UI thread so two songs can never overlap, even on rapid clicks.
         if previous is not None:
             previous.join()
         if cancel.is_set():

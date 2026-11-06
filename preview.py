@@ -1,4 +1,4 @@
-"""Cancellable, audio-only previews. No downloads or USB writes."""
+"""Cancellable, audio-only song playback. No downloads or USB writes."""
 import json
 import re
 import subprocess
@@ -44,12 +44,12 @@ def run_process(command, cancel, stop_process, timeout, reject_stderr=False):
                           stderr=subprocess.PIPE, text=True, encoding='utf-8', errors='replace',
                           start_new_session=sys.platform != 'win32',
                           creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0)) as process:
-        deadline = time.monotonic() + timeout
+        deadline = time.monotonic() + timeout if timeout is not None else None
         try:
             while True:
                 if cancel.is_set():
                     raise PreviewCancelled()
-                if time.monotonic() >= deadline:
+                if deadline is not None and time.monotonic() >= deadline:
                     raise TimeoutError('Preview timed out. Please try again.')
                 try:
                     output, error = process.communicate(timeout=.1)
@@ -92,7 +92,7 @@ def stream_options(output):
     return url, ''.join(lines)
 
 
-def play(song_url, downloader, player, cancel, stop_process, notify, seconds=30):
+def play(song_url, downloader, player, cancel, stop_process, notify, seconds=None):
     if not re.fullmatch(r'https://www\.youtube\.com/watch\?v=[A-Za-z0-9_-]{11}', song_url):
         raise ValueError('Choose a song from the search results.')
     output = run_process(downloader + [
@@ -104,11 +104,14 @@ def play(song_url, downloader, player, cancel, stop_process, notify, seconds=30)
     if cancel.is_set():
         raise PreviewCancelled()
     notify('playing')
-    # ffplay streams directly to the sound device; the 30-second sample is not saved.
-    run_process([player, '-hide_banner', '-loglevel', 'error', '-nostats', '-nodisp', '-autoexit',
+    # Stream the entire song without saving it. Only the build self-test sets a duration.
+    command = [player, '-hide_banner', '-loglevel', 'error', '-nostats', '-nodisp', '-autoexit',
                  '-vn', '-volume', '70', '-rw_timeout', '10000000',
-                 '-tls_verify', '1', '-headers', headers, '-i', url, '-t', str(seconds)],
-                cancel, stop_process, timeout=50, reject_stderr=True)
+                 '-tls_verify', '1', '-headers', headers, '-i', url]
+    if seconds is not None:
+        command += ['-t', str(seconds)]
+    run_process(command, cancel, stop_process,
+                timeout=None if seconds is None else seconds + 20, reject_stderr=True)
 
 
 def smoke_test(player):

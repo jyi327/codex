@@ -13,7 +13,7 @@ import preview
 
 
 class PreviewTests(unittest.TestCase):
-    def test_streaming_sample_does_not_download_or_launch_a_browser(self):
+    def test_full_song_playback_has_no_duration_limit_and_does_not_save_files(self):
         metadata = json.dumps({'url': 'https://r1.googlevideo.com/videoplayback?token=secret',
                                'http_headers': {'User-Agent': 'test', 'Referer': 'https://www.youtube.com/'}})
         states = []
@@ -28,8 +28,18 @@ class PreviewTests(unittest.TestCase):
         self.assertEqual(playback[0], 'ffplay')
         self.assertIn('-nodisp', playback)
         self.assertIn('-vn', playback)
-        self.assertEqual(playback[playback.index('-t') + 1], '30')
+        self.assertNotIn('-t', playback)
+        self.assertIsNone(run.call_args_list[1].kwargs['timeout'])
         self.assertEqual(states, ['playing'])
+
+    def test_build_check_can_still_limit_its_own_playback(self):
+        metadata = json.dumps({'url': 'https://r1.googlevideo.com/audio'})
+        with patch.object(preview, 'run_process', side_effect=[metadata, '']) as run:
+            preview.play('https://www.youtube.com/watch?v=abcdefghijk', ['downloader'], 'ffplay',
+                         threading.Event(), lambda p: None, lambda s: None, seconds=2)
+        command = run.call_args_list[1].args[0]
+        self.assertEqual(command[command.index('-t') + 1], '2')
+        self.assertIsNotNone(run.call_args_list[1].kwargs['timeout'])
 
     def test_invalid_song_and_unexpected_stream_are_rejected(self):
         for url in ['https://example.com/song', 'file:///song.mp3', 'https://www.youtube.com/watch?v=bad']:
@@ -54,7 +64,7 @@ class PreviewTests(unittest.TestCase):
         self.assertEqual(run.call_count, 1)
 
     def test_cancelling_or_timing_out_reaps_real_process(self):
-        for cancel_after in [True, False]:
+        for cancel_after, timeout in [(True, 3), (False, .3), (True, None)]:
             cancel = threading.Event()
             stopped = []
             def stop(process):
@@ -66,11 +76,16 @@ class PreviewTests(unittest.TestCase):
             try:
                 with self.assertRaises(preview.PreviewCancelled if cancel_after else TimeoutError):
                     preview.run_process([sys.executable, '-c', 'import time;time.sleep(60)'], cancel,
-                                        stop, timeout=3 if cancel_after else .3)
+                                        stop, timeout=timeout)
             finally:
                 timer.cancel()
             self.assertEqual(len(stopped), 1)
             self.assertIsNotNone(stopped[0].poll())
+
+    def test_unlimited_playback_waits_for_natural_completion(self):
+        result = preview.run_process([sys.executable, '-c', 'import time;time.sleep(.2);print("finished")'],
+                                     threading.Event(), lambda p: self.fail('Stopped before song ended'), timeout=None)
+        self.assertEqual(result.strip(), 'finished')
 
     def test_process_error_does_not_expose_signed_urls(self):
         with self.assertRaisesRegex(RuntimeError, '^Preview unavailable') as error:
