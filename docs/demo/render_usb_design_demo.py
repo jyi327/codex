@@ -11,33 +11,28 @@ FONT='/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc'
 BOLD='/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc'
 fonts={(s,b):ImageFont.truetype(BOLD if b else FONT,s) for s in (13,14,15,16,17,18,19,20,22,24,26,28,30) for b in (False,True)}
 steps=[
-('open','双击桌面的 YouTubeToUSB.exe。',3),
-('usb','插入 USB 后，会自动显示里面的歌曲。',4),
-('count','USB 后的数字，是里面的歌曲总数。',3),
-('filter','只显示歌曲；不显示扩展名、隐藏文件或其他文件。',4),
-('folder','点击文件夹，可展开或收起里面的歌曲。',4),
-('refresh','点击刷新，更新 USB 歌曲列表。',3),
-('delete','要删除 USB 歌曲，点击旁边的 DELETE。',3),
-('confirm','确认后删除；按 CANCEL 则保留歌曲。',4),
-('deleted','删除后，歌曲列表和数量会自动更新。',2.5),
-('search','输入想下载的歌名，再按 SEARCH。',4),
-('play','按 PLAY 播放整首歌曲，不会加入下载列表。',4),
-('stop','按 STOP，停止播放。',2.5),
-('select','点击歌曲，加入下载列表；可以选择多首。',4),
-('remove','选错了，在下载列表按 × 移除。',3),
-('clear','还没下载时，CANCEL 会清空已选歌曲。',3.5),
-('reselect','重新选择要下载的歌曲。',2.5),
-('search2','继续搜索其他歌曲，例如「选择」。',4),
-('add2','选择歌曲，加入同一个下载列表。',3),
-('start','确认列表后，按 START 下载。',3),
-('progress','下载、转换和复制会自动进行；请勿拔出 USB。',5),
-('activecancel','下载时按 CANCEL，可停止操作。',3),
-('details','按 Details，可查看处理详情。',3.5),
-('failed','若有歌曲失败，按 RETRY FAILED 重试。',3.5),
-('retry','只重试失败的歌曲，不会重复下载已完成的歌曲。',4.5),
-('complete','下载完成，USB 歌曲列表和数量自动更新。',3),
-('more','按 DOWNLOAD MORE，可继续搜索和下载歌曲。',4),
-('done','全部完成后，按 DONE 关闭程序。',3),
+('open','双击桌面的 YouTubeToUSB.exe。',2.5),
+('usb','插入 USB。',2.5),
+('folder','点击文件夹，查看歌曲。',3),
+('delete','删除歌曲，按 DELETE。',2.5),
+('confirm','按 DELETE 确认；按 CANCEL 保留。',3),
+('search','输入想下载的歌名，按 SEARCH。',3.5),
+('play','按 PLAY 播放歌曲。',2.5),
+('stop','按 STOP 停止播放。',2),
+('select','点击歌曲，加入下载列表。',3),
+('remove','选错了，按 × 移除。',2.5),
+('clear','按 CANCEL，清空已选歌曲。',3),
+('reselect','重新选择想下载的歌曲。',2),
+('search2','继续搜索其他歌曲，例如「选择」。',3.5),
+('add2','点击歌曲，加入下载列表。',2.5),
+('start','按 START 开始下载。',2.5),
+('progress','等待完成，先不要拔出 USB。',4),
+('activecancel','要中途停止，按 CANCEL。',2.5),
+('failed','下载失败，按 RETRY FAILED。',3),
+('retry','等待完成。',2.5),
+('complete','歌曲已存入 USB。',2),
+('more','继续下载，按 DOWNLOAD MORE。',3),
+('done','完成后，按 DONE 关闭。',2.5),
 ]
 timeline=[];at=0
 for key,subtitle,duration in steps:
@@ -101,7 +96,8 @@ def desktop():
 BASE=desktop()
 LX,LW,MX,MW,UX,UW=108,560,680,360,1052,440
 A='可可托海的牧羊人';B='选择';BAD=A+'｜女声版'
-keys=[x[0] for x in steps]
+# Stable story phases keep data transitions independent of removed explanatory scenes.
+keys=['open','usb','count','filter','folder','refresh','delete','confirm','deleted','search','play','stop','select','remove','clear','reselect','search2','add2','start','progress','activecancel','details','failed','retry','complete','more','done']
 
 
 def state(key,p):
