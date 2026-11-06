@@ -840,8 +840,10 @@ class App:
             usb_library.delete_song(snapshot, entry, cancel)
         except usb_library.Cancelled:
             self.events.put({'usb_delete_result': 'cancelled'})
-        except Exception:
-            self.events.put({'usb_delete_result': 'error'})
+        except Exception as error:
+            self.log_detail(f'USB song deletion failed ({type(error).__name__}): {error}')
+            self.events.put({'usb_delete_result': 'error', 'usb_delete_error': str(error),
+                             'usb_delete_code': getattr(error, 'winerror', None) or getattr(error, 'errno', None)})
         else:
             self.events.put({'usb_delete_result': 'deleted'})
 
@@ -854,8 +856,17 @@ class App:
         elif self.remove_when_stopped:
             self.prepare_exit(close_app=False)
         else:
-            self.show_progress({'deleted': 'Song deleted', 'cancelled': 'Stopped',
-                'error': 'Could not delete this song. Refresh USB and try again.'}[event['usb_delete_result']], 0)
+            message = {'deleted': 'Song deleted', 'cancelled': 'Stopped',
+                'error': 'Could not delete this song. Refresh USB and try again.'}[event['usb_delete_result']]
+            if event['usb_delete_result'] == 'error':
+                code = event.get('usb_delete_code')
+                if code in (32, 33):
+                    message = 'Song is in use. Close other players and try again.'
+                elif code in (5, 13, 19, 30):
+                    message = 'Windows blocked deletion. Check USB write protection.'
+                elif event.get('usb_delete_error', '').startswith(('This song has changed.', 'USB changed.', 'USB or song location changed.')):
+                    message = event['usb_delete_error']
+            self.show_progress(message, 0)
             self.sync_usb_library(force=True)
 
     def search_songs(self):

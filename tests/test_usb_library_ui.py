@@ -106,7 +106,12 @@ class USBLibraryUITests(unittest.TestCase):
             self.ui.delete_usb_song(snapshot, song)
         self.finish_delete()
         self.assertEqual((self.folder / 'Song.mp3').read_bytes(), b'a different song')
-        self.assertIn('Could not delete', self.ui.progress_label.cget('text'))
+        self.assertIn('has changed', self.ui.progress_label.cget('text'))
+
+    def test_delete_error_explains_when_a_song_is_in_use(self):
+        self.ui.finish_usb_delete({'usb_delete_result': 'error', 'usb_delete_code': 32,
+                                   'usb_delete_error': 'The file is in use'})
+        self.assertIn('Song is in use', self.ui.progress_label.cget('text'))
 
     def test_drive_changed_during_confirmation_cannot_delete_old_song(self):
         snapshot = self.ui.usb_snapshot

@@ -13,6 +13,8 @@ on:
       - requirements-ui.txt
       - build-windows.ps1
       - tests/**
+      - scripts/test-windows-usb-filesystems.ps1
+      - scripts/check-usb-filesystem.py
       - .github/workflows/windows-portable.yml
 permissions:
   contents: read
@@ -53,6 +55,9 @@ jobs:
             Write-Host "::error title=Windows tests::$testError"
             exit $LASTEXITCODE
           }
+      - name: Test disposable FAT32 and exFAT song deletion
+        shell: pwsh
+        run: ./scripts/test-windows-usb-filesystems.ps1
       - name: Package standalone application
         shell: pwsh
         run: ./build-windows.ps1
